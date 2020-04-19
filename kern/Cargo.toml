@@ -1,0 +1,21 @@
+[package]
+name = "kern"
+version = "0.1.0"
+authors = ["codetector <codetector@codetector.cn>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+pc-keyboard = "0.5.0"
+x86_64 = "^0.10.1"
+cpuio = "^0.2.0"
+spin = "^0.5.2"
+multiboot2 = "^0.8.2"
+volatile = "^0.2.6"
+[dependencies.lazy_static]
+version = "1.4.0"
+features = ["spin_no_std"]

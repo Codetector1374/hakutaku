@@ -2,6 +2,8 @@ use core::panic::PanicInfo;
 use crate::vga_buffer::CONSOLE;
 use core::fmt::Write;
 
+pub mod oom;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("

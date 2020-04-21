@@ -46,6 +46,11 @@ enable_paging:
     ret
 
 set_up_page_tables:
+    ; Recursive P4 entry 511
+    mov eax, p4_table
+    or eax, 0b11;
+    mov [p4_table + 8 * 511], eax
+
     ; map first P4 entry to P3 table
     mov eax, p3_table
     or eax, 0b11 ; present + writable

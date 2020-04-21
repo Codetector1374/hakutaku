@@ -4,6 +4,10 @@ use lazy_static::lazy_static;
 use crate::hardware::pic::ChainedPics;
 use spin::MutexGuard;
 use x86_64::instructions::hlt;
+use crate::{FRAME_ALLOC, PAGE_TABLE};
+use x86_64::structures::paging::{PageTable, Mapper, FrameAllocator, Page, PageTableFlags};
+use core::borrow::BorrowMut;
+use crate::memory::frame_allocator::FrameAllocWrapper;
 
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
@@ -51,13 +55,24 @@ pub fn init_idt() {
 extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
 
+    let faulting_addr = Cr2::read();
+
     println!("PAGE FAULT");
-    println!("Faulting ADDR: {:?}", Cr2::read());
+    println!("Faulting ADDR: {:?}", faulting_addr);
     println!("Error Code {:?}", ec);
     println!("{:#?}", stack_frame);
-    loop {
-        hlt();
-    }
+
+    let pFrame = FRAME_ALLOC.lock().allocate_frame().expect("No Space");
+    let mut lmao = FrameAllocWrapper{};
+
+    unsafe {
+        PAGE_TABLE.lock().map_to(
+            Page::containing_address(faulting_addr),
+            pFrame,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+            &mut lmao
+        )
+    }.expect("Can't map").flush();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {

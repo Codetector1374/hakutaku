@@ -1,0 +1,9 @@
+[package]
+name = "stack-vec"
+version = "0.1.0"
+authors = [
+    "Yaotian Feng <codetector@codetector.cn>"
+]
+edition = "2018"
+
+[dependencies]

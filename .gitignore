@@ -4,3 +4,5 @@
 *.ipr
 *.iws
 *.elf
+
+*target/

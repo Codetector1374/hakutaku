@@ -46,22 +46,23 @@ struct Buffer {
     chars: [[Volatile<ScreenChar>; BUFFER_WIDTH]; BUFFER_HEIGHT],
 }
 
-pub struct Writer {
+pub struct VGATextBuffer {
     column_position: usize,
+    row_position: usize,
     color_code: ColorCode,
     buffer: Unique<Buffer>,
 }
 
-impl Writer {
+impl VGATextBuffer {
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
-            byte => {
+            32..=126 => {
                 if self.column_position >= BUFFER_WIDTH {
                     self.new_line();
                 }
 
-                let row = BUFFER_HEIGHT - 1;
+                let row = self.row_position;
                 let col = self.column_position;
 
                 let color_code = self.color_code;
@@ -70,7 +71,16 @@ impl Writer {
                     color_code,
                 });
                 self.column_position += 1;
-            }
+            },
+            8 => { // DEL
+                if self.column_position > 0 {
+                    self.column_position -= 1;
+                } else if self.row_position > 0 {
+                    self.row_position -= 1;
+                    self.column_position = BUFFER_WIDTH - 1;
+                }
+            },
+            _ => {}
         }
     }
 
@@ -79,14 +89,18 @@ impl Writer {
     }
 
     fn new_line(&mut self) {
-        for row in 1..BUFFER_HEIGHT {
-            for col in 0..BUFFER_WIDTH {
-                let buffer = self.buffer();
-                let character = buffer.chars[row][col].read();
-                buffer.chars[row - 1][col].write(character);
+        if self.row_position == BUFFER_HEIGHT - 1 {
+            for row in 1..BUFFER_HEIGHT {
+                for col in 0..BUFFER_WIDTH {
+                    let buffer = self.buffer();
+                    let character = buffer.chars[row][col].read();
+                    buffer.chars[row - 1][col].write(character);
+                }
             }
+            self.clear_row(BUFFER_HEIGHT-1);
+        } else {
+            self.row_position += 1;
         }
-        self.clear_row(BUFFER_HEIGHT-1);
         self.column_position = 0;
     }
 
@@ -108,15 +122,16 @@ impl Writer {
 }
 
 use core::fmt;
-impl fmt::Write for Writer {
+impl fmt::Write for VGATextBuffer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_str(s);
         Ok(())
     }
 }
 
-pub static CONSOLE: Mutex<Writer> = Mutex::new(Writer{
+pub static CONSOLE: Mutex<VGATextBuffer> = Mutex::new(VGATextBuffer {
     column_position: 0,
+    row_position: BUFFER_HEIGHT - 1,
     color_code: ColorCode::new(Color::White, Color::Black),
     buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) }
 });

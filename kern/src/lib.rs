@@ -22,6 +22,9 @@ use crate::memory::allocator::Allocator;
 use alloc::vec::Vec;
 use crate::hardware::apic::{map_apic_to_target, read_apic_id};
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
+use multiboot2::BootInformation;
+use crate::hardware::keyboard::blocking_get_char;
+use crate::shell::Shell;
 
 extern crate stack_vec;
 extern crate cpuio;
@@ -40,6 +43,7 @@ pub mod hardware;
 pub mod interrupts;
 pub mod gdt;
 pub mod memory;
+pub mod shell;
 
 lazy_static! {
     static ref PAGE_TABLE: Mutex<RecursivePageTable<'static>> = {
@@ -57,24 +61,13 @@ lazy_static! {
     };
 }
 
-fn kern_init() {
-    println!("Re-Initializing GDT in Rust");
+fn kern_init(boot_info: &BootInformation) {
     gdt::init();
-    println!("Setting Exception Handlers");
     interrupts::init_idt();
-    println!("Initializing PICs");
     unsafe {
         PICS.lock().initialize();
     };
-    x86_64::instructions::interrupts::enable();
-}
-
-#[cfg_attr(not(test), global_allocator)]
-pub static ALLOCATOR: Allocator = Allocator::uninitialized();
-
-#[no_mangle]
-pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
-    let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+    // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
     let elf_sections_tag = boot_info.elf_sections_tag()
         .expect("Elf-sections tag required");
@@ -84,13 +77,8 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
         .max().unwrap();
     let multiboot_start = boot_info.start_address();
     let multiboot_end = multiboot_start + (boot_info.total_size() as usize);
-    println!("Kern: 0x{:08X} -> 0x{:08X}", kernel_start, kernel_end);
-    println!("MB: 0x{:08X} -> 0x{:08X}", multiboot_start, multiboot_end);
 
     let max_kern_mem = max(multiboot_end, kernel_end as usize);
-
-    kern_init();
-
     for (id, seg) in mem_tags.memory_areas().enumerate() {
         let mut seg_start = seg.start_address() as usize;
         let seg_end = align_down(seg.end_address() as usize, 4096);
@@ -106,28 +94,40 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
         )
     }
 
+    // Initialize Allocator
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
     unsafe {
         ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), (kernel_end as usize + total_mem));
     }
 
+    // Initialize APIC
     map_apic_to_target();
-
-    println!("APIC ID: {}", read_apic_id());
-    println!("Timer Divider: {:?}", hardware::apic::timer::read_divider());
+    // TODO Change Timer to a determinable value
     hardware::apic::timer::set_divider(APICTimerDividerOption::DivideBy128);
-    println!("Timer Divider: {:?}", hardware::apic::timer::read_divider());
-    println!("Timer Target: {:X}", hardware::apic::timer::initial_value());
-    println!("APIC SPUR: 0x{:X}", hardware::apic::get_apic_spurious_lvt());
-    println!("APIC TIMR: 0x{:X}", hardware::apic::timer::get_timer_lvt());
-    hardware::apic::timer::set_timer_lvt(0x30, APICTimerMode::Periodic, false);
-    hardware::apic::set_apic_spurious_lvt(0xFF, true);
-    hardware::apic::timer::set_initial_value(0x000F_FFFF);
+    // hardware::apic::timer::set_timer_lvt(0x30, APICTimerMode::Periodic, false);
+    // hardware::apic::set_apic_spurious_lvt(0xFF, true);
+    // hardware::apic::timer::set_initial_value(0x000F_FFFF);
 
-    print!("Going to Sleep");
+    // ENABLE Interrupt at the END
+    x86_64::instructions::interrupts::enable();
+}
+
+#[cfg_attr(not(test), global_allocator)]
+pub static ALLOCATOR: Allocator = Allocator::uninitialized();
+
+#[no_mangle]
+pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
+    let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+    kern_init(&boot_info);
+    // Must initialize after allocator
+    hardware::keyboard::initialize();
+
+    println!("Kern started");
+
+    let mut shell = Shell::new();
+
     loop {
-        unsafe {
-            asm!("hlt" :::: "volatile");
-        }
+        shell.shell("> ");
+        // println!("chr: 0x{:02X}", blocking_get_char());
     }
 }

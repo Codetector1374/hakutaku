@@ -1,0 +1,3 @@
+[submodule "libs/x86_64"]
+	path = libs/x86_64
+	url = git@github.com:Codetector1374/x86_64.git

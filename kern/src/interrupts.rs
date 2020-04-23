@@ -1,4 +1,4 @@
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode, HandlerFunc};
 use crate::gdt::DOUBLE_FAULT_IST_INDEX;
 use lazy_static::lazy_static;
 use crate::hardware::pic::ChainedPics;
@@ -8,6 +8,10 @@ use crate::{FRAME_ALLOC, PAGE_TABLE};
 use x86_64::structures::paging::{PageTable, Mapper, FrameAllocator, Page, PageTableFlags};
 use core::borrow::BorrowMut;
 use crate::memory::frame_allocator::FrameAllocWrapper;
+use crate::hardware::apic::end_of_interrupt;
+use crate::interrupts::context_switch::save_context;
+
+pub mod context_switch;
 
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
@@ -21,6 +25,7 @@ lazy_static! {
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
+        idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(save_context as u64);
         idt
     };
 }
@@ -30,6 +35,7 @@ lazy_static! {
 pub enum InterruptIndex {
     Timer = PIC1_OFFSET + 0,
     Keyboard = PIC1_OFFSET + 1,
+    ApicTimer = 0x30,
 }
 
 impl InterruptIndex {
@@ -62,13 +68,13 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
     println!("Error Code {:?}", ec);
     println!("{:#?}", stack_frame);
 
-    let pFrame = FRAME_ALLOC.lock().allocate_frame().expect("No Space");
+    let phys_frame = FRAME_ALLOC.lock().allocate_frame().expect("No Space");
     let mut lmao = FrameAllocWrapper{};
 
     unsafe {
         PAGE_TABLE.lock().map_to(
             Page::containing_address(faulting_addr),
-            pFrame,
+            phys_frame,
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
             &mut lmao
         )
@@ -103,6 +109,11 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut Interrup
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
     }
+}
+
+extern "x86-interrupt" fn apic_timer(_stack_frame: &mut InterruptStackFrame) {
+    println!("Timer APIC");
+    end_of_interrupt();
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {

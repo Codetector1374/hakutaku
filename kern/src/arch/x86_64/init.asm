@@ -157,7 +157,7 @@ p2_table:
     resb 4096
 align 16 ; stack needs to be 16 aligned
 stack_bottom:
-    resb 4096 * 4
+    resb 4096 * 16
 stack_top:
 
 

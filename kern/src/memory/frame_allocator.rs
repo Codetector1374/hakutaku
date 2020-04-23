@@ -55,7 +55,7 @@ pub struct SegmentFrameAllocator {
 
 impl SegmentFrameAllocator {
     pub fn new() -> SegmentFrameAllocator {
-        let mut alloc = SegmentFrameAllocator {
+        let alloc = SegmentFrameAllocator {
             segments: [MemorySegment::default(); 16],
             count: 0,
         };

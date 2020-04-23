@@ -4,7 +4,7 @@ target ?= $(arch)-unknown-none
 iso := build/os-$(arch).iso
 rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
-QEMU_ARGS ?= -m 4G -no-reboot -cdrom $(iso)
+QEMU_ARGS ?= -no-reboot -cdrom $(iso)
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg

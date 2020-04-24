@@ -43,7 +43,9 @@ pub mod hardware;
 pub mod interrupts;
 pub mod gdt;
 pub mod memory;
+pub mod pci;
 pub mod shell;
+
 
 lazy_static! {
     static ref PAGE_TABLE: Mutex<RecursivePageTable<'static>> = {
@@ -79,14 +81,14 @@ fn kern_init(boot_info: &BootInformation) {
     let multiboot_end = multiboot_start + (boot_info.total_size() as usize);
 
     let max_kern_mem = max(multiboot_end, kernel_end as usize);
-    for (id, seg) in mem_tags.memory_areas().enumerate() {
+    for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;
         let seg_end = align_down(seg.end_address() as usize, 4096);
         if seg.end_address() < kernel_start {
             continue;
-        } else if seg_start <= kernel_start as usize && seg.end_address() > kernel_end {
+        } else if seg_start <= kernel_start as usize && seg.end_address() > max_kern_mem as u64 {
             // Section contains kernel
-            seg_start = align_up(kernel_end as usize, 4096);
+            seg_start = align_up(max_kern_mem, 4096);
         }
         FRAME_ALLOC.lock().add_segment(
             MemorySegment::new(seg_start, seg_end - seg_start)
@@ -97,7 +99,7 @@ fn kern_init(boot_info: &BootInformation) {
     // Initialize Allocator
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
     unsafe {
-        ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), (kernel_end as usize + total_mem));
+        ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), kernel_end as usize + total_mem);
     }
 
     // Initialize APIC

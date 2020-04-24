@@ -3,6 +3,8 @@ use alloc::string::String;
 use core::fmt::Write;
 use core::str;
 use crate::hardware::keyboard::blocking_get_char;
+use crate::pci::device::PCIDevice;
+use crate::pci::enumerate_pci_bus;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -142,6 +144,21 @@ impl Shell {
                 }
                 Ok(0)
             },
+            "lspci" => {
+                let stuff = enumerate_pci_bus();
+
+                for dev in &stuff {
+                    println!("{:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                        dev.device.bus,
+                        dev.device.device_number,
+                        dev.device.func,
+                        dev.header_type,
+                        dev.class,
+                    );
+                }
+
+                Ok(0)
+            }
             "exit" => {
                 Ok(-1)
             },

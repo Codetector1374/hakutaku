@@ -19,6 +19,7 @@ all: $(iso)
 copy: $(kernel)
 	@cp $(grub_cfg) $(DEVICE)/boot/grub/grub.cfg
 	cp $(kernel) $(DEVICE)/boot/kernel.bin
+	sync
 
 kernel:
 	@RUST_TARGET_PATH=$(shell pwd) cargo xbuild --release --target x86_64-unknown-none

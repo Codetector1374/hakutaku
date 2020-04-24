@@ -93,7 +93,7 @@ impl Allocator {
 
     unsafe fn alloc_from_bin(&mut self, layout: Layout, bin_number: usize) -> *mut u8 {
         let bin: &mut LinkedList = &mut self.bins[bin_number];
-        let align_check = (layout.align() - 1);
+        let align_check = layout.align() - 1;
         for chunk in bin.iter_mut() {
             if (chunk.value() as usize) & align_check == 0 {
                 // Aligned
@@ -146,8 +146,7 @@ impl LocalAlloc for Allocator {
             return core::ptr::null_mut();
         }
 
-        let bin: &mut LinkedList = &mut self.bins[bin_number];
-        let align_check = (layout.align() - 1);
+        let align_check = layout.align() - 1;
         let alloc_from_bin = self.alloc_from_bin(layout, bin_number);
         if alloc_from_bin != core::ptr::null_mut() {
             return alloc_from_bin;

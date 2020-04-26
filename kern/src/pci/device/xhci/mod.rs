@@ -7,7 +7,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::paging::{Mapper, Page, Size4KiB, PhysFrame, PageTableFlags, MapperAllSizes};
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use core::ops::Add;
-use crate::pci::device::xhci::extended_capability::ExtendedCapabilityTags;
+use crate::pci::device::xhci::extended_capability::{ExtendedCapabilityTags, ExtendedCapabilityTag};
 
 pub mod extended_capability;
 
@@ -73,27 +73,69 @@ impl From<PCIDevice> for XHCI {
     }
 }
 
+bitflags! {
+    pub struct HCCFlags: u32 {
+        const ADDR64BIT = 0x1 << 0;
+        const BNC = 0x1 << 1;
+        /// 64 bit context size if true
+        const CONTEXTSIZE = 0x1 << 2;
+        const PORTPOWERCTRL = 0x1 << 3;
+        const PORTINDC = 0x1 << 4;
+        const LIGHTRST = 0x1 << 5;
+        const LTC = 0x1 << 6;
+        const NOSSID = 0x1 << 7;
+        const PARSEALLEVNT = 0x1 << 8;
+        const STOP = 0x1 << 9;
+        // not fully listed
+    }
+}
+
+#[derive(Debug)]
+pub enum XHCIError {
+    NoLegacyTag,
+    UnexpectedOwnership,
+}
+
 impl XHCI {
-    pub fn cap_list(&mut self) {
+    pub fn hcc_flags(&mut self) -> HCCFlags {
+        let val = self.capability_regs.hcc_param1.read();
+        HCCFlags::from_bits_truncate(val)
+    }
+
+    pub fn extended_capability(&mut self) -> ExtendedCapabilityTags {
         // The higher 16bits specify the offset from base,
         // unit is **DWORD**
         let hcc1val = self.capability_regs.hcc_param1.read();
-        if hcc1val & 0x1 == 1 {
-            debug!("[XHCI] controller supports 64 bits!");
-        }
         let cap_list_offset = (hcc1val >> 14) & !0b11u32; // LSH 2 so it's in bytes
-        debug!("caplist offset {:X}", cap_list_offset);
         let cap_list_base: VirtAddr = self.mmio_virt_base + cap_list_offset as u64;
-        let val = unsafe {
-            (cap_list_base.as_ptr() as *const u32).read_volatile()
-        };
+        ExtendedCapabilityTags::get(cap_list_base.as_u64() as usize)
+    }
 
-        debug!("[XHCI] thing: {:X}", val);
-
-        let mut tags = ExtendedCapabilityTags::get(cap_list_base.as_u64() as usize);
-
-        for (id,tag) in &mut tags.enumerate() {
-            debug!("[XHCI] tag{}: {:?}", id, tag);
+    /// This function transfer the ownership of the controller from BIOS
+    pub fn transfer_ownership(&mut self) -> Result<(), XHCIError> {
+        let tags = self.extended_capability().find(|t| {
+            match t {
+                ExtendedCapabilityTag::USBLegacySupport{ head:_, bios_own:_, os_own :_} => true,
+                _ => false
+            }
+        });
+        match tags {
+            Some(t) => {
+                if let ExtendedCapabilityTag::USBLegacySupport { head, bios_own, os_own } = t {
+                    if !bios_own || os_own {
+                        return Err(XHCIError::UnexpectedOwnership);
+                    }
+                    let write_ptr = (head as *mut u8).wrapping_offset(3);
+                    let read_ptr = (head as *const u8).wrapping_offset(2);
+                    unsafe { write_ptr.write_volatile(0x1) }; // Claiming Ownership
+                    // Now wait
+                    // TODO implement timeout
+                    while unsafe { read_ptr.read_volatile() } & 0x1 > 1 {}
+                    return Ok(())
+                }
+                panic!("wrong tag type found");
+            },
+            _ => Err(XHCIError::NoLegacyTag)
         }
     }
 }

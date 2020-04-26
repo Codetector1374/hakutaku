@@ -28,6 +28,7 @@ checksum = "22b8e308ccfc5acf3b82f79c0eac444cf6114cb2ac67a230ca6c177210068daa"
 name = "kern"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "cpuio",
  "lazy_static",
  "log",

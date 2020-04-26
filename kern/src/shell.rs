@@ -166,7 +166,14 @@ impl Shell {
                                             let mut xhci = XHCI::from(dev.device);
                                             debug!("{:x?}", &xhci);
                                             debug!("cap length: 0x{:X}", xhci.capability_regs.length_and_ver.read());
-                                            xhci.cap_list();
+                                            debug!("[XHCI] hccflags: {:?}", xhci.hcc_flags());
+                                            let tags = xhci.extended_capability();
+                                            for tag in tags {
+                                                debug!("{:x?}", tag);
+                                            }
+                                            debug!("Claiming Ownership...");
+                                            let result = xhci.transfer_ownership();
+                                            debug!("Result: {:?}", result);
                                         },
                                         _ => {}
                                     }

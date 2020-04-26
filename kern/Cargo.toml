@@ -17,6 +17,7 @@ spin = "^0.5.2"
 multiboot2 = "^0.8.2"
 volatile = "^0.2.6"
 log = "^0.4.8"
+bitflags="1.2.1"
 stack-vec = { path="../libs/stack-vec" }
 [dependencies.lazy_static]
 version = "1.4.0"

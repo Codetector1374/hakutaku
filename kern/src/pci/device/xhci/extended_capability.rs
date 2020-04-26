@@ -63,7 +63,9 @@ impl Iterator for ExtendedCapabilityTags {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ExtendedCapabilityTag {
     USBLegacySupport {
-        head: *const u32
+        head: *mut u32,
+        bios_own: bool,
+        os_own: bool,
     },
     SupportedProtocol {
         major: u8,
@@ -93,6 +95,16 @@ pub enum ExtendedCapabilityTag {
 impl From<&RawExtCapTag> for ExtendedCapabilityTag {
     fn from(t: &RawExtCapTag) -> Self {
         match t.id {
+            0x1 => {
+                let head = unsafe {t.base_ptr.read_volatile()};
+                let bios_own = (head >> 16 & 0x1) == 1;
+                let os_own = (head >> 24 & 0x1) == 1;
+                ExtendedCapabilityTag::USBLegacySupport {
+                    head: t.base_ptr as *mut u32,
+                    bios_own,
+                    os_own,
+                }
+            },
             0x2 => {
                 // Read Major / Minor
                 let head = unsafe {

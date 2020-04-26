@@ -38,6 +38,8 @@ extern crate alloc;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate bitflags;
 
 #[macro_use]
 pub mod vga_buffer;

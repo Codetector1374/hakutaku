@@ -1,6 +1,7 @@
 pub mod frame_allocator;
 pub mod paging;
 pub mod allocator;
+pub mod mmio_bump_allocator;
 
 
 // Utils

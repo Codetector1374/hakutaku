@@ -25,6 +25,7 @@ use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use multiboot2::BootInformation;
 use crate::hardware::keyboard::blocking_get_char;
 use crate::shell::Shell;
+use x86_64::instructions::interrupts::without_interrupts;
 
 extern crate stack_vec;
 extern crate cpuio;
@@ -35,6 +36,8 @@ extern crate pc_keyboard;
 extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
 
 #[macro_use]
 pub mod vga_buffer;
@@ -45,6 +48,7 @@ pub mod gdt;
 pub mod memory;
 pub mod pci;
 pub mod shell;
+pub mod logger;
 
 
 lazy_static! {
@@ -84,16 +88,20 @@ fn kern_init(boot_info: &BootInformation) {
     for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;
         let seg_end = align_down(seg.end_address() as usize, 4096);
+        debug!("chkseg: {:016X} - {:016X}", seg_start, seg_end);
         if seg.end_address() < kernel_start {
             continue;
         } else if seg_start <= kernel_start as usize && seg.end_address() > max_kern_mem as u64 {
             // Section contains kernel
             seg_start = align_up(max_kern_mem, 4096);
         }
-        FRAME_ALLOC.lock().add_segment(
-            MemorySegment::new(seg_start, seg_end - seg_start)
-                .expect("Unable to create")
-        )
+        debug!("AddSeg: {:016X} - {:016X}", seg_start, seg_end);
+        without_interrupts(||{
+            FRAME_ALLOC.lock().add_segment(
+                MemorySegment::new(seg_start, seg_end - seg_start)
+                    .expect("Unable to create")
+            )
+        });
     }
 
     // Initialize Allocator
@@ -119,6 +127,7 @@ pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 
 #[no_mangle]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
+    unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
     kern_init(&boot_info);
     // Must initialize after allocator

@@ -38,7 +38,7 @@ impl From<u8> for HeaderType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PCIDeviceClass {
     Unclassified(u8, u8),
     MassStorageController(PCIClassMassStorage),
@@ -56,7 +56,7 @@ impl PCIDeviceClass {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PCIClassMassStorage {
     /// Prog If
     IDEController(u8),
@@ -71,7 +71,7 @@ pub enum PCIClassMassStorage {
     Unknown(u8, u8)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PCIClassNetworkController {
     Ethernet,
     TokenRing,
@@ -85,7 +85,7 @@ pub enum PCIClassNetworkController {
     Other(u8, u8)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PCIClassDisplayController {
     VGACompatible(u8),
     XGA,
@@ -93,7 +93,7 @@ pub enum PCIClassDisplayController {
     Other(u8, u8)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum PCISerialBusController {
     FireWire(u8),
     ACCESSBus,
@@ -120,7 +120,7 @@ impl PCISerialBusController {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum PCISerialBusUSB {
     UHCI,
     OHCI,

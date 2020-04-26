@@ -1,11 +1,16 @@
 use spin::Mutex;
 use x86_64::instructions::port::{PortWriteOnly, Port};
-use crate::pci::PCIError;
+use crate::pci::{PCIError, PCIDeviceInfo};
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::pci::class::HeaderType;
+use crate::pci::class::{HeaderType, PCIDeviceClass};
+use x86_64::PhysAddr;
+
+pub mod xhci;
 
 const CONFIG_ADDR: u16 = 0x0CF8;
 const CONFIG_DATA: u16 = 0x0CFC;
+
+const CONFIG_BAR_BASE_REG: u8 = 0x04;
 
 const PORTS: Mutex<PCIPorts> = Mutex::new(PCIPorts::new());
 
@@ -47,6 +52,25 @@ impl PCIDevice {
         }
     }
 
+    pub fn into_info(self) -> Option<PCIDeviceInfo> {
+        match self.vendor_id() {
+            Ok(_) => {
+                let r_class = self.device_info();
+                let class = PCIDeviceClass::from(r_class.0, r_class.1, r_class.2);
+                let header = self.header_type();
+                Some(PCIDeviceInfo {
+                    device: self,
+                    class,
+                    rev: r_class.3,
+                    header_type: header,
+                })
+            },
+            _ => {
+                None
+            }
+        }
+    }
+
     /// Caller Guarantees that reg is within range 0-63
     pub fn get_addr(&self, reg: u8) -> u32 {
         0x8000_0000 // Enable Bit
@@ -68,6 +92,65 @@ impl PCIDevice {
                 }
             }))
         }
+    }
+
+    pub fn write_config_word(&mut self, register_number: u8, value: u32) {
+        without_interrupts(|| {
+            unsafe {
+                PORTS.lock().addr.write(self.get_addr(register_number));
+                PORTS.lock().data_port.write(value);
+            }
+        })
+    }
+
+    pub fn base_mmio_address(&self, bar: u8) -> Option<PhysAddr> {
+        /* Okay this is really complicated.
+         * 1) Read the bar register
+         * 2) Check bit 0, 1: I/O Space Mapped, 0: Memory Mapped
+         * 3) If Memory: Check bit [2:1] => 00 : Must map below 4G
+         *                               => 01 : Must below 1Meg
+         *                               => 10 : Anywhere 64bit
+         *        (Make sure you read the next bar to get the higher 32bits)
+         * 4) The real memory address, you need to align by masking off
+         *    bottom 4 bits. For real IO address, mask the bottom 2 bits off.
+        */
+        let bar0 = self.read_config_bar_register(bar);
+        if bar0 & 0x1 != 0 {
+            // IOSpace
+            return None;
+        } else {
+            return match (bar0 >> 1) & 0b11 {
+                0b10 => {
+                    Some(PhysAddr::new((bar0 as u64) & !0b1111u64))
+                },
+                _ => {
+                    if bar >= 5 {
+                        panic!("Can't 64 bit on BAR5");
+                    }
+                    let bar1 = self.read_config_bar_register(bar + 1);
+                    let mut phy = (bar1 as u64) << 32;
+                    phy |= bar0 as u64;
+                    Some(PhysAddr::new(phy & !0b1111u64))
+                }
+            }
+        }
+
+    }
+
+    pub fn read_config_bar_register(&self, no: u8) -> u32 {
+        self.read_config_dword(CONFIG_BAR_BASE_REG + no as u8).expect("die")
+    }
+
+    pub fn irq_line(&self) -> u8 {
+        self.read_config_dword(0xF).expect("die") as u8
+    }
+
+    pub fn address_space_size(&mut self) -> usize {
+        let old_value = self.read_config_bar_register(0);
+        self.write_config_word(CONFIG_BAR_BASE_REG, 0xFFFF_FFFF);
+        let new_val = self.read_config_bar_register(0);
+        self.write_config_word(CONFIG_BAR_BASE_REG, old_value);
+        (!new_val) as usize
     }
 
     pub fn vendor_id(&self) -> Result<u16, PCIError> {

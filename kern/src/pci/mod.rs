@@ -11,7 +11,7 @@ pub enum PCIError {
     SlotNumber,
     FuncNumber,
     RegisterNumber,
-    InvalidDevice
+    InvalidDevice,
 }
 
 #[derive(Debug)]
@@ -43,31 +43,20 @@ fn check_device(bus: u8, device: u8, vec: &mut Vec<PCIDeviceInfo>) {
 }
 
 /// Returns: isMultiFunction
-fn check_function(bus: u8, device:u8, func: u8, vec: &mut Vec<PCIDeviceInfo>) -> bool {
+fn check_function(bus: u8, device: u8, func: u8, vec: &mut Vec<PCIDeviceInfo>) -> bool {
     let dev = PCIDevice::new_unchecked(bus, device, func).expect("err");
-    match dev.vendor_id() {
-        Ok(vid) => {
-            let r_class = dev.device_info();
-            let class = PCIDeviceClass::from(r_class.0, r_class.1, r_class.2);
-            let header = dev.header_type();
-            if let HeaderType::PCIBridge(_) = dev.header_type() {
-                let bus_number = dev.secondary_bus_number();
-                if bus_number != bus {
-                    enumerate_bus(bus_number, vec);
-                }
+    match dev.into_info() {
+        Some(info) => {
+            let mf = info.header_type.is_multi_function();
+            if let HeaderType::PCIBridge(_) = info.header_type {
+                let num = info.device.secondary_bus_number();
+                vec.push(info);
+                enumerate_bus(num, vec);
+            } else {
+                vec.push(info);
             }
-            vec.push(
-                PCIDeviceInfo {
-                    device: dev,
-                    class,
-                    rev: r_class.3,
-                    header_type: header
-                }
-            );
-            return header.is_multi_function();
-        },
-        _ => {
-            false
+            mf
         }
+        _ => { false }
     }
 }

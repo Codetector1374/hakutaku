@@ -4,7 +4,9 @@ use core::fmt::Write;
 use core::str;
 use crate::hardware::keyboard::blocking_get_char;
 use crate::pci::device::PCIDevice;
-use crate::pci::enumerate_pci_bus;
+use crate::pci::*;
+use crate::pci::class::*;
+use crate::pci::device::xhci::XHCI;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -147,14 +149,33 @@ impl Shell {
             "lspci" => {
                 let stuff = enumerate_pci_bus();
 
-                for dev in &stuff {
-                    println!("{:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
-                        dev.device.bus,
-                        dev.device.device_number,
-                        dev.device.func,
-                        dev.header_type,
-                        dev.class,
-                    );
+                for dev in stuff {
+                    match dev.class.clone() {
+                        PCIDeviceClass::SerialBusController(c) => {
+                            match &c {
+                                PCISerialBusController::USBController(usb) => {
+                                    match usb {
+                                        PCISerialBusUSB::XHCI => {
+                                            trace!("XHCI {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                                                     dev.device.bus,
+                                                     dev.device.device_number,
+                                                     dev.device.func,
+                                                     dev.header_type,
+                                                     dev.class,
+                                            );
+                                            let mut xhci = XHCI::from(dev.device);
+                                            debug!("{:x?}", &xhci);
+                                            debug!("cap length: 0x{:X}", xhci.capability_regs.length_and_ver.read());
+                                            xhci.cap_list();
+                                        },
+                                        _ => {}
+                                    }
+                                },
+                                _ => {}
+                            }
+                        },
+                        _ => {}
+                    }
                 }
 
                 Ok(0)
@@ -165,6 +186,5 @@ impl Shell {
             _ => Err(())
         }
     }
-
 }
 

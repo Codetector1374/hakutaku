@@ -5,6 +5,7 @@ use crate::memory::frame_allocator::FrameAllocWrapper;
 
 pub mod timer;
 
+// TODO: Change to use MMIO Allocator
 pub const APIC_MAP_TARGET_BASE: usize = 0xFFFF_FF00_0000_0000;
 
 const APIC_OFFSET_APICID: usize = 0x20;

@@ -98,7 +98,7 @@ fn kern_init(boot_info: &BootInformation) {
         let res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
         match &res {
             Err(e) => {
-                warn!("Unmap Err @ 0x{:x}, {:?}", page_base, res);
+                warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
             },
             _ => {}
         }
@@ -137,7 +137,7 @@ fn kern_init(boot_info: &BootInformation) {
     // Initialize APIC
     GLOBAL_APIC.lock().initialize();
     GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
-    GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0));
+    GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
     GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
 
 }
@@ -159,6 +159,5 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
     loop {
         shell.shell("> ");
-        // println!("chr: 0x{:02X}", blocking_get_char());
     }
 }

@@ -111,10 +111,6 @@ impl From<PCIDevice> for XHCI {
                     ).expect("Unable to map").flush();
                 }
             }
-            let value: u64;
-            unsafe {
-                asm!("mov %cr3, $0" : "=r" (value):::"volatile", "memory");
-            }
             va
         });
         let mmio_vbase = va_root + base_offset;

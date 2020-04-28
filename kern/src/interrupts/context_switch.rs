@@ -33,5 +33,5 @@ extern "x86-interrupt" {
 #[no_mangle]
 pub extern "C" fn handle_context_switch(tf: &mut TrapFrame) {
     GLOBAL_APIC.lock().end_of_interrupt();
-    // println!("CTX: {:?}", tf);
+    println!("Context Switching");
 }

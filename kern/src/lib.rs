@@ -93,6 +93,7 @@ fn kern_init(boot_info: &BootInformation) {
 
     let max_kern_mem = align_up(max(multiboot_end, kernel_end as usize), 1024*1024*2); // 2M
     debug!("Kernel end 0x{:x}", max_kern_mem);
+    // Unmap extra memory (Only kernel is kept)
     for page_base in (max_kern_mem..1024*1024*1024).step_by(1024*1024*2) { // 1GB, 2MB
         let res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
         match &res {
@@ -102,6 +103,7 @@ fn kern_init(boot_info: &BootInformation) {
             _ => {}
         }
     }
+
     for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;
         let seg_end = align_down(seg.end_address() as usize, 4096);
@@ -129,21 +131,15 @@ fn kern_init(boot_info: &BootInformation) {
         ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), kernel_end as usize + total_mem);
     }
 
-    // Initialize APIC
-    GLOBAL_APIC.lock().initialize();
-    // GLOBAL_APIC.lock().timer_set_divider(APICTimerDividerOption::DivideBy128);
-    // GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
-    // GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
-    // GLOBAL_APIC.lock().timer_set_initial_value(0x000F_FFFF);
-    // map_apic_to_target();
-    // // TODO Change Timer to a determinable value
-    // hardware::apic::timer::set_divider(APICTimerDividerOption::DivideBy128);
-    // // hardware::apic::timer::set_timer_lvt(0x30, APICTimerMode::Periodic, false);
-    // // hardware::apic::set_apic_spurious_lvt(0xFF, true);
-    // // hardware::apic::timer::set_initial_value(0x000F_FFFF);
-
     // ENABLE Interrupt at the END
     x86_64::instructions::interrupts::enable();
+
+    // Initialize APIC
+    GLOBAL_APIC.lock().initialize();
+    GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
+    GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0));
+    GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
+
 }
 
 #[cfg_attr(not(test), global_allocator)]

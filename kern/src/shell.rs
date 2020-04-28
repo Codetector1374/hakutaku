@@ -16,7 +16,7 @@ enum Error {
 }
 
 pub struct Shell {
-    history: Vec<String>,
+    xhci: Option<XHCI>,
 }
 
 /// A structure representing a single shell command.
@@ -55,7 +55,7 @@ impl Command {
 impl Shell {
     pub fn new() -> Shell {
         Shell{
-            history: Vec::default(),
+            xhci: None,
         }
     }
     /// Starts a shell using `prefix` as the prefix for each line. This function
@@ -96,8 +96,6 @@ impl Shell {
                 print!("\n")
             }
             let user_command_input = str::from_utf8(&input_vec).unwrap();
-            self.history.insert(0, String::from(user_command_input));
-            self.history.truncate(10);
             let cmd_result =
                 Command::parse(&user_command_input);
             match cmd_result {
@@ -140,9 +138,20 @@ impl Shell {
                 print!("\n");
                 Ok(0)
             },
-            "history" => {
-                for (id, cmd) in self.history.iter().rev().enumerate() {
-                    println!("{} {}", id, cmd);
+            "lsusb" => {
+                match &mut self.xhci {
+                    Some(xhci) => {
+                        println!("[XHCI] Connected Devices");
+                        for i in 1..=xhci.max_ports() {
+                            if xhci.has_device(i) {
+                                println!("  > port: {}", i);
+                            }
+                        }
+                    },
+                    None => {
+                        println!("XHCI Not Initialized");
+                        return Ok(1)
+                    }
                 }
                 Ok(0)
             },
@@ -156,6 +165,9 @@ impl Shell {
                                 PCISerialBusController::USBController(usb) => {
                                     match usb {
                                         PCISerialBusUSB::XHCI => {
+                                            if self.xhci.is_some() {
+                                                continue;
+                                            }
                                             trace!("XHCI {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
                                                      dev.device.bus,
                                                      dev.device.device_number,
@@ -164,16 +176,11 @@ impl Shell {
                                                      dev.class,
                                             );
                                             let mut xhci = XHCI::from(dev.device);
-                                            debug!("{:x?}", &xhci);
-                                            debug!("cap length: 0x{:X}", xhci.capability_regs.length_and_ver.read());
-                                            debug!("[XHCI] hccflags: {:?}", xhci.hcc_flags());
-                                            let tags = xhci.extended_capability();
-                                            for tag in tags {
-                                                debug!("{:x?}", tag);
-                                            }
                                             debug!("Claiming Ownership...");
                                             let result = xhci.transfer_ownership();
-                                            debug!("Result: {:?}", result);
+                                            debug!("Ownership Result: {:?}", result);
+                                            xhci.setup_controller();
+                                            self.xhci = Some(xhci);
                                         },
                                         _ => {}
                                     }

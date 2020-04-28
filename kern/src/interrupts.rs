@@ -79,6 +79,7 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
             &mut lmao
         )
     }.expect("Can't map").flush();
+    println!("Mapped");
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {

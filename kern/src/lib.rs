@@ -43,6 +43,8 @@ extern crate bitflags;
 
 #[macro_use]
 pub mod vga_buffer;
+#[macro_use]
+mod macros;
 pub mod init;
 pub mod hardware;
 pub mod interrupts;
@@ -56,7 +58,7 @@ pub mod logger;
 lazy_static! {
     static ref PAGE_TABLE: Mutex<RecursivePageTable<'static>> = {
         unsafe {
-            Mutex::new(RecursivePageTable::new_unchecked(&mut(*(P4_PAGETBALE as *mut PageTable)), PageTableIndex::new(511)))
+            Mutex::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))
         }
     };
 }

@@ -5,8 +5,8 @@ use spin::Mutex;
 
 pub static GMMIO_ALLOC: Mutex<MMIOAllocator> = Mutex::new(
     MMIOAllocator::new(
-        VirtAddr::new_truncate(0xFFFF_FF01_0000_0000),
-        VirtAddr::new_truncate(0xFFFF_FF00_0000_0000)
+        VirtAddr::new_truncate(0xFFFF_FF00_0000_0000),
+        VirtAddr::new_truncate(0xFFFF_FE00_0000_0000)
     ));
 
 pub struct MMIOAllocator {

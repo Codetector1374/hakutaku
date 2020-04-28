@@ -20,15 +20,24 @@ impl X86Keyboard {
     }
 
     fn push_keystroke(&mut self, key: u8) {
-        self.key_buffer.as_mut().expect("Uninitialized").push_back(key);
+        match self.key_buffer.as_mut() {
+            Some(b) => b.push_back(key),
+            None => {}
+        }
     }
 
     fn available(&self) -> usize {
-        self.key_buffer.as_ref().expect("Uninitialized").len()
+        match self.key_buffer.as_ref() {
+            Some(buf) => buf.len(),
+            None => 0,
+        }
     }
 
     fn read(&mut self) -> Option<u8> {
-        self.key_buffer.as_mut().expect("Uninitialized").pop_front()
+        match self.key_buffer.as_mut() {
+            Some(b) => b.pop_front(),
+            None => None,
+        }
     }
 }
 

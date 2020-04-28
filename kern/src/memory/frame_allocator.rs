@@ -101,6 +101,7 @@ pub struct FrameAllocWrapper;
 
 unsafe impl FrameAllocator<Size4KiB> for FrameAllocWrapper {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        trace!("Page Table Alloc");
         FRAME_ALLOC.lock().allocate_frame()
     }
 }

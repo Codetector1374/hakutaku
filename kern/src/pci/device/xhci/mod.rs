@@ -105,11 +105,15 @@ impl From<PCIDevice> for XHCI {
                 unsafe {
                     PAGE_TABLE.lock().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
-                        PhysFrame::from_start_address(paddr).expect("Unaligned PA"),
-                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT ,
+                        PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
+                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
                         &mut fallocw,
-                    ).expect("Unable to map")
-                }.flush();
+                    ).expect("Unable to map").flush();
+                }
+            }
+            let value: u64;
+            unsafe {
+                asm!("mov %cr3, $0" : "=r" (value):::"volatile", "memory");
             }
             va
         });
@@ -199,6 +203,9 @@ impl XHCI {
             if dcbaa_pa.as_u64() & 0b11_1111 != 0 {
                 panic!("Alignment issue");
             }
+            // let ptr = &self.operational_regs.device_context_base_addr_array_ptr as *const Volatile<u64> as usize;
+            // let trans = PAGE_TABLE.lock().translate(VirtAddr::new(ptr as u64));
+            // trace!("PTR: 0x{:X}, {:#?}", ptr, trans);
             self.operational_regs.device_context_base_addr_array_ptr.write(dcbaa_pa.as_u64());
         } else {
             panic!("[XHCI] dcbaa already setup");

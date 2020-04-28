@@ -1,4 +1,5 @@
 use x86_64::structures::idt::InterruptStackFrame;
+use crate::hardware::apic::GLOBAL_APIC;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -31,6 +32,6 @@ extern "x86-interrupt" {
 
 #[no_mangle]
 pub extern "C" fn handle_context_switch(tf: &mut TrapFrame) {
-    crate::hardware::apic::end_of_interrupt();
-    println!("CTX: {:?}", tf);
+    GLOBAL_APIC.lock().end_of_interrupt();
+    // println!("CTX: {:?}", tf);
 }

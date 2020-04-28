@@ -8,8 +8,9 @@ use crate::{FRAME_ALLOC, PAGE_TABLE};
 use x86_64::structures::paging::{PageTable, Mapper, FrameAllocator, Page, PageTableFlags};
 use core::borrow::BorrowMut;
 use crate::memory::frame_allocator::FrameAllocWrapper;
-use crate::hardware::apic::end_of_interrupt;
 use crate::interrupts::context_switch::save_context;
+use crate::hardware::pit::GLOBAL_PIT;
+use crate::memory::mmio_bump_allocator::MMIO_BASE;
 
 pub mod context_switch;
 
@@ -63,10 +64,13 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
 
     let faulting_addr = Cr2::read();
 
-    println!("PAGE FAULT");
-    println!("Faulting ADDR: {:?}", faulting_addr);
-    println!("Error Code {:?}", ec);
-    println!("{:#?}", stack_frame);
+    trace!("PAGE FAULT");
+    trace!("Faulting ADDR: {:?}", faulting_addr);
+    trace!("Error Code {:?}", ec);
+    if faulting_addr.as_u64() >= MMIO_BASE {
+        panic!("MMIO FAULT");
+    }
+    // println!("{:#?}", stack_frame);
 
     let phys_frame = FRAME_ALLOC.lock().allocate_frame().expect("No Space");
     let mut lmao = FrameAllocWrapper{};
@@ -79,7 +83,7 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
             &mut lmao
         )
     }.expect("Can't map").flush();
-    println!("Mapped");
+    debug!("Mapped VA: {:?}", faulting_addr);
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
@@ -113,12 +117,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &mut Interrup
     }
 }
 
-extern "x86-interrupt" fn apic_timer(_stack_frame: &mut InterruptStackFrame) {
-    println!("Timer APIC");
-    end_of_interrupt();
-}
-
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
+    GLOBAL_PIT.lock().interrupt();
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }

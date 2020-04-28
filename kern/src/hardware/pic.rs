@@ -35,6 +35,22 @@ impl Pic {
     unsafe fn end_of_interrupt(&mut self) {
         self.command.write(END_OF_INTERRUPT);
     }
+
+    fn mask_interrupt(&mut self, int_id: u8) {
+        let mask = 1u8 << (int_id - self.offset);
+        unsafe {
+            let current = self.data.read();
+            self.data.write(current | mask);
+        }
+    }
+
+    fn unmask_interrupt(&mut self, int_id: u8) {
+        let mask = !(1u8 << (int_id - self.offset));
+        unsafe {
+            let current = self.data.read();
+            self.data.write(current & mask);
+        }
+    }
 }
 
 pub struct ChainedPics {
@@ -96,7 +112,6 @@ impl ChainedPics {
 
     pub fn handles_interrupt(&self, int_id: u8) -> bool {
         self.pics.iter().any(|p| p.handles_interrupt(int_id))
-
     }
 
     pub unsafe fn notify_end_of_interrupt(&mut self, interrupt_id: u8) {
@@ -105,6 +120,26 @@ impl ChainedPics {
                 self.pics[1].end_of_interrupt();
             }
             self.pics[0].end_of_interrupt();
+        }
+    }
+
+    pub fn mask_interrupt(&mut self, int_id: u8) {
+        if self.handles_interrupt(int_id) {
+            if self.pics[1].handles_interrupt(int_id) {
+                self.pics[1].mask_interrupt(int_id);
+            } else {
+                self.pics[0].mask_interrupt(int_id);
+            }
+        }
+    }
+
+    pub fn unmask_interrupt(&mut self, int_id: u8) {
+        if self.handles_interrupt(int_id) {
+            if self.pics[1].handles_interrupt(int_id) {
+                self.pics[1].unmask_interrupt(int_id);
+            } else {
+                self.pics[0].unmask_interrupt(int_id);
+            }
         }
     }
 }

@@ -21,21 +21,24 @@ use crate::memory::frame_allocator::{SegmentFrameAllocator, MemorySegment};
 use crate::memory::allocator::Allocator;
 use alloc::vec::Vec;
 use multiboot2::BootInformation;
-use crate::hardware::keyboard::blocking_get_char;
 use crate::shell::Shell;
 use x86_64::instructions::interrupts::without_interrupts;
 use crate::hardware::apic::GLOBAL_APIC;
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
-use bitflags::_core::time::Duration;
+use core::time::Duration;
+use crate::process::scheduler::GlobalScheduler;
+use crate::process::process::Process;
 
 extern crate stack_vec;
+extern crate kernel_api;
 extern crate cpuio;
 extern crate spin;
 extern crate multiboot2;
 extern crate x86_64;
 extern crate pc_keyboard;
 extern crate alloc;
+extern crate hashbrown;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -56,23 +59,22 @@ pub mod pci;
 pub mod shell;
 pub mod logger;
 pub mod process;
-
+pub mod syscall;
 
 lazy_static! {
     static ref PAGE_TABLE: Mutex<RecursivePageTable<'static>> = {
-        unsafe {
-            Mutex::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))
-        }
+        unsafe {Mutex::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))}
     };
 }
 
 lazy_static! {
     static ref FRAME_ALLOC: Mutex<SegmentFrameAllocator> = {
-        Mutex::new({
-            SegmentFrameAllocator::new()
-        })
+        Mutex::new(SegmentFrameAllocator::new())
     };
 }
+#[cfg_attr(not(test), global_allocator)]
+pub static ALLOCATOR: Allocator = Allocator::uninitialized();
+pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
 
 fn kern_init(boot_info: &BootInformation) {
     gdt::init();
@@ -95,14 +97,15 @@ fn kern_init(boot_info: &BootInformation) {
     debug!("Kernel end 0x{:x}", max_kern_mem);
     // Unmap extra memory (Only kernel is kept)
     for page_base in (max_kern_mem..1024*1024*1024).step_by(1024*1024*2) { // 1GB, 2MB
-        let res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
-        match &res {
+        let mut res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
+        match &mut res {
             Err(e) => {
                 warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
             },
             _ => {}
         }
     }
+    x86_64::instructions::tlb::flush_all();
 
     for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;
@@ -123,8 +126,6 @@ fn kern_init(boot_info: &BootInformation) {
         });
     }
 
-    // Page Table Unmap
-
     // Initialize Allocator
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
     unsafe {
@@ -135,15 +136,21 @@ fn kern_init(boot_info: &BootInformation) {
     x86_64::instructions::interrupts::enable();
 
     // Initialize APIC
+    trace!("initializing APIC");
     GLOBAL_APIC.lock().initialize();
+    trace!("initialized APIC");
     GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
     GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
     GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
 
-}
+    // Start Clock
+    trace!("starting clock");
+    GLOBAL_PIT.lock().start_clock();
 
-#[cfg_attr(not(test), global_allocator)]
-pub static ALLOCATOR: Allocator = Allocator::uninitialized();
+    unsafe {
+        SCHEDULER.initialize();
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
@@ -155,9 +162,12 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
     println!("Kern started");
 
-    let mut shell = Shell::new();
+    SCHEDULER.start();
+}
 
+pub extern fn lol() {
+    let mut shell = Shell::new();
     loop {
-        shell.shell("> ");
+        shell.shell("1> ");
     }
 }

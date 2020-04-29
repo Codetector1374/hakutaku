@@ -9,6 +9,7 @@ use spin::Mutex;
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::spin_wait;
 use bitflags::_core::time::Duration;
+use crate::interrupts::{PICS, InterruptIndex};
 
 pub mod timer;
 
@@ -44,6 +45,10 @@ impl APIC {
     }
 
     pub fn initialize(&mut self) {
+        if self.base_va.as_u64() != 0 {
+            warn!("[APIC] double initialization");
+            return;
+        }
         let apic_base = x86_64::registers::model_specific::IA32ApicBase::read_apic_base_addr();
         let (va, size) = without_interrupts(|| {
             GMMIO_ALLOC.lock().allocate(4096)
@@ -62,11 +67,16 @@ impl APIC {
         };
         self.base_pa = apic_base;
         self.base_va = va;
+        trace!("[APIC] Mapped");
 
 
+        trace!("[APIC] Measure Start");
         // Measurement
-        self.timer_set_divider(APICTimerDividerOption::DivideBy4);
-        self.timer_set_initial_value(0xFFFF_FFFF);
+        without_interrupts(||{
+            self.timer_set_divider(APICTimerDividerOption::DivideBy4);
+            self.timer_set_initial_value(0xFFFF_FFFF);
+            unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer as u8) };
+        });
         spin_wait(MEASURE_DURATION);
         let diff = 0xFFFF_FFFF - self.timer_read_current_value();
         let tick_scale = diff / MEASURE_DURATION.as_micros() as u32;
@@ -74,7 +84,7 @@ impl APIC {
         debug!("[APIC] 0x{:x}t in {:?}, {} t/us (x4)", diff, MEASURE_DURATION, tick_scale);
     }
 
-    pub fn read_apic_id(&self) -> u8 {
+    pub fn apic_id(&self) -> u8 {
         let word = (self.base_va.as_u64() + APIC_OFFSET_APICID) as *const Volatile<u32>;
         (unsafe {
             &*word

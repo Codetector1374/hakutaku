@@ -7,6 +7,11 @@ use crate::pci::device::PCIDevice;
 use crate::pci::*;
 use crate::pci::class::*;
 use crate::pci::device::xhci::XHCI;
+use crate::process::scheduler::GlobalScheduler;
+use crate::SCHEDULER;
+use crate::hardware::pit::PIT;
+use kernel_api::syscall::sleep;
+use bitflags::_core::time::Duration;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -138,6 +143,41 @@ impl Shell {
                 print!("\n");
                 Ok(0)
             },
+            "sys" => {
+                unsafe {
+                    asm!("
+                    mov rax, 40
+                    int 0x80
+                    ":::"rax":"volatile", "intel");
+                }
+                Ok(0)
+            },
+            "sleep" => {
+                if command.args.len() > 1 {
+                    let sec = command.args[1].parse::<u64>().unwrap_or_else(|_| {0});
+                    if sec == 0 {
+                        println!("Unable to parse time");
+                        return Ok(1)
+                    } else {
+                        let time = sleep(Duration::from_secs(sec)).expect("sleep works");
+                        println!("slept for {:?}", time);
+                    }
+                } else {
+                    println!("Usage: sleep <seconds>")
+                }
+                Ok(0)
+            },
+            "date" => {
+                let time = PIT::current_time();
+                println!("Since boot: {:?}", time);
+                Ok(0)
+            },
+            "ps" => {
+                SCHEDULER.critical(|s| {
+                    println!("{:#?}", s.cpus);
+                });
+                Ok(0)
+            }
             "lsusb" => {
                 match &mut self.xhci {
                     Some(xhci) => {

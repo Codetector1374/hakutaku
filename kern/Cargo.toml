@@ -16,9 +16,11 @@ cpuio = "^0.2.0"
 spin = "^0.5.2"
 multiboot2 = "^0.8.2"
 volatile = "^0.2.6"
+hashbrown = "0.7.2"
 log = "^0.4.8"
 bitflags="1.2.1"
 stack-vec = { path="../libs/stack-vec" }
+kernel_api = { path="../libs/kernel_api" }
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]

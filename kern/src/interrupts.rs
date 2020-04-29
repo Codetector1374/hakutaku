@@ -8,13 +8,14 @@ use crate::{FRAME_ALLOC, PAGE_TABLE};
 use x86_64::structures::paging::{PageTable, Mapper, FrameAllocator, Page, PageTableFlags};
 use core::borrow::BorrowMut;
 use crate::memory::frame_allocator::FrameAllocWrapper;
-use crate::interrupts::context_switch::save_context;
+use crate::interrupts::context_switch::{apic_timer, syscall_handler};
 use crate::hardware::pit::GLOBAL_PIT;
 use crate::memory::mmio_bump_allocator::MMIO_BASE;
 use keyboard::*;
 
 pub mod context_switch;
 mod keyboard;
+mod syscall;
 
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
@@ -28,7 +29,8 @@ lazy_static! {
         idt.page_fault.set_handler_fn(page_fault_handler);
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
-        idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(save_context as u64);
+        idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(apic_timer as u64);
+        idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
         idt
     };
 }
@@ -39,6 +41,7 @@ pub enum InterruptIndex {
     Timer = PIC1_OFFSET + 0,
     Keyboard = PIC1_OFFSET + 1,
     ApicTimer = 0x30,
+    SysCall = 0x80,
 }
 
 impl InterruptIndex {
@@ -85,10 +88,11 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
             &mut lmao
         )
     }.expect("Can't map").flush();
-    debug!("Mapped VA: {:?}", faulting_addr);
+    trace!("Mapped VA: {:?}", faulting_addr);
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
+    trace!("PIT Interrupt");
     GLOBAL_PIT.lock().interrupt();
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());

@@ -1,7 +1,7 @@
 use x86_64::instructions::port::{PortWriteOnly, Port};
 use x86_64::instructions::interrupts::without_interrupts;
 use spin::Mutex;
-use bitflags::_core::time::Duration;
+use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
 
 const PIT_CH0: u16 = 0x40;
@@ -11,10 +11,24 @@ const PIT_CMD: u16 = 0x43;
 
 pub static GLOBAL_PIT: Mutex<PIT> = Mutex::new(PIT::new());
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum PITMode {
+    TerminalCount = 0x0,
+    HWOneShot = 0x1,
+    RateGenerator = 0x2,
+    SquareWave = 0x3,
+    SWStrobe = 0x4,
+    HWStrobe = 0x5,
+}
+
 pub struct PIT {
     command: PortWriteOnly<u8>,
     channel0: Port<u8>,
+    mode: PITMode,
+    interval: Duration,
     spin_flag: bool,
+    time: Duration,
 }
 
 /*
@@ -50,22 +64,41 @@ impl PIT {
         PIT {
             command: PortWriteOnly::new(PIT_CMD),
             channel0: Port::new(PIT_CH0),
+            mode: PITMode::TerminalCount,
+            interval: Duration::from_nanos(0),
             spin_flag: false,
+            time: Duration::from_nanos(0),
         }
     }
 
-    pub fn sw_oneshot(&mut self, value: u16) {
+    fn setup(&mut self, interval: Duration, mode: PITMode) {
+        let value = interval.as_nanos() / 838;
+        assert!(value < 65535);
+        let value = value as u16;
         without_interrupts(|| {
+            self.mode = mode;
+            self.interval = interval;
             unsafe {
-                self.command.write(0b00111000); // Mode 4, ch0, lo/hi, binary
+                self.command.write(0b00110000 | ((mode as u8) << 1)); // Mode 4, ch0, lo/hi, binary
                 self.channel0.write(value as u8); // LoByte
                 self.channel0.write((value >> 8) as u8); // HiByte
             }
         });
     }
 
+    pub fn start_clock(&mut self) {
+        self.setup(MAX_SINGLE_WAIT_DURATION, PITMode::SquareWave);
+    }
+
     pub fn interrupt(&mut self) {
         self.spin_flag = true;
+        self.time += self.interval;
+    }
+
+    pub fn current_time() -> Duration {
+        without_interrupts(|| {
+            GLOBAL_PIT.lock().time
+        })
     }
 }
 
@@ -73,16 +106,11 @@ const MAX_SINGLE_WAIT_DURATION: Duration = Duration::from_millis(50);
 
 // 1 tick is ~838 ns;
 // 65535 tick -> 54918330
-fn spin_wait_internal(ns: u32) {
-    let ticks = ns / 838;
-    if ticks < 1 {
-        return;
-    }
-    assert!(ticks <= 65535);
+fn spin_wait_internal(d: Duration) {
     PICS.lock().mask_interrupt(InterruptIndex::Timer as u8);
     without_interrupts(||{
         GLOBAL_PIT.lock().spin_flag = false;
-        GLOBAL_PIT.lock().sw_oneshot(ticks as u16);
+        GLOBAL_PIT.lock().setup(d, PITMode::SWStrobe);
     });
     PICS.lock().unmask_interrupt(InterruptIndex::Timer as u8);
     loop {
@@ -104,7 +132,7 @@ pub fn spin_wait(d: Duration) {
         } else {
             d_remain
         };
-        spin_wait_internal(delay.as_nanos() as u32);
+        spin_wait_internal(delay);
         d_remain -= delay;
     }
 }

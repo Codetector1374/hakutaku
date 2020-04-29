@@ -75,7 +75,6 @@ impl APIC {
         without_interrupts(||{
             self.timer_set_divider(APICTimerDividerOption::DivideBy4);
             self.timer_set_initial_value(0xFFFF_FFFF);
-            unsafe { PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer as u8) };
         });
         spin_wait(MEASURE_DURATION);
         let diff = 0xFFFF_FFFF - self.timer_read_current_value();

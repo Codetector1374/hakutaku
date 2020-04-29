@@ -86,6 +86,18 @@ impl PIT {
         });
     }
 
+    fn read(&mut self) -> u16 {
+        without_interrupts(|| {
+            let mut val = 0u16;
+            unsafe {
+                self.command.write(0b0);
+                val = self.channel0.read() as u16;
+                val |= (self.channel0.read() as u16) << 8;
+            }
+            val
+        })
+    }
+
     pub fn start_clock(&mut self) {
         self.setup(MAX_SINGLE_WAIT_DURATION, PITMode::SquareWave);
     }
@@ -107,21 +119,16 @@ const MAX_SINGLE_WAIT_DURATION: Duration = Duration::from_millis(50);
 // 1 tick is ~838 ns;
 // 65535 tick -> 54918330
 fn spin_wait_internal(d: Duration) {
-    PICS.lock().mask_interrupt(InterruptIndex::Timer as u8);
     without_interrupts(||{
-        GLOBAL_PIT.lock().spin_flag = false;
         GLOBAL_PIT.lock().setup(d, PITMode::SWStrobe);
-    });
-    PICS.lock().unmask_interrupt(InterruptIndex::Timer as u8);
-    loop {
-        let current_flag = without_interrupts(|| {
-            GLOBAL_PIT.lock().spin_flag
-        });
-        if current_flag {
-            break;
+        let mut value = GLOBAL_PIT.lock().read();
+        loop {
+            let new_val = GLOBAL_PIT.lock().read();
+            if new_val > value {
+                break;
+            }
         }
-        x86_64::instructions::hlt();
-    }
+    });
 }
 
 pub fn spin_wait(d: Duration) {

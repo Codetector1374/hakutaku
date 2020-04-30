@@ -14,7 +14,7 @@ use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, 
 use x86_64::VirtAddr;
 use lazy_static::lazy_static;
 use spin::{Mutex, MutexGuard};
-use crate::interrupts::PICS;
+use crate::interrupts::{PICS, InterruptIndex};
 use crate::memory::paging::P4_PAGETBALE;
 use crate::memory::{align_up, align_down};
 use crate::memory::frame_allocator::{SegmentFrameAllocator, MemorySegment};
@@ -23,12 +23,14 @@ use alloc::vec::Vec;
 use multiboot2::BootInformation;
 use crate::shell::Shell;
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::hardware::apic::GLOBAL_APIC;
+use crate::hardware::apic::{GLOBAL_APIC, APICDeliveryMode};
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
 use core::time::Duration;
 use crate::process::scheduler::GlobalScheduler;
 use crate::process::process::Process;
+use crate::pci::device::xhci::XHCI;
+use kernel_api::syscall::sleep;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -52,6 +54,7 @@ pub mod vga_buffer;
 mod macros;
 pub mod init;
 pub mod hardware;
+pub mod device;
 pub mod interrupts;
 pub mod gdt;
 pub mod memory;
@@ -81,6 +84,7 @@ fn kern_init(boot_info: &BootInformation) {
     interrupts::init_idt();
     unsafe {
         PICS.lock().initialize();
+        // PICS.lock().unmask_interrupt(InterruptIndex::XHCI as u8);
     };
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
@@ -142,6 +146,7 @@ fn kern_init(boot_info: &BootInformation) {
     GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
     GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
     GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
+    GLOBAL_APIC.lock().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
 
     // Start Clock
     trace!("starting clock");
@@ -161,7 +166,8 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     hardware::keyboard::initialize();
 
     println!("Kern started");
-
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
     SCHEDULER.start();
 }
 
@@ -169,5 +175,61 @@ pub extern fn lol() {
     let mut shell = Shell::new();
     loop {
         shell.shell("1> ");
+    }
+}
+
+pub extern fn usb_process() -> ! {
+    use pci::GLOBAL_PCI;
+    use pci::class::*;
+    use pci::device::*;
+
+    let mut xhci: Option<XHCI> = None;
+
+    let stuff = GLOBAL_PCI.lock().enumerate_pci_bus();
+
+    for mut dev in stuff {
+        match dev.info.class.clone() {
+            PCIDeviceClass::SerialBusController(c) => {
+                match &c {
+                    PCISerialBusController::USBController(usb) => {
+                        match usb {
+                            PCISerialBusUSB::XHCI => {
+                                if xhci.is_some() {
+                                    continue;
+                                }
+                                trace!("XHCI {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                                       dev.bus,
+                                       dev.device_number,
+                                       dev.func,
+                                       dev.info.header_type,
+                                       dev.info.class,
+                                );
+                                let mut newxhci = XHCI::from(dev);
+                                debug!("Claiming Ownership...");
+                                let result = newxhci.transfer_ownership();
+                                debug!("Ownership Result: {:?}", result);
+                                newxhci.setup_controller();
+                                xhci = Some(newxhci);
+                            },
+                            _ => {}
+                        }
+                    },
+                    _ => {}
+                }
+            },
+            _ => {}
+        }
+    }
+
+    sleep(Duration::from_secs(1));
+    debug!("USB Controller Setup: {}", xhci.is_some());
+
+    xhci.as_mut().expect("").send_nop();
+
+    loop {
+        // if xhci.is_some() {
+        //     xhci.as_mut().expect("xhci").poll_ports();
+            sleep(Duration::from_millis(100));
+        // }
     }
 }

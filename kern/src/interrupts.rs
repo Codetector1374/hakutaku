@@ -30,6 +30,7 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
         idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(apic_timer as u64);
+        idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(syscall_handler as u64);
         idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
         idt
     };
@@ -40,6 +41,7 @@ lazy_static! {
 pub enum InterruptIndex {
     Timer = PIC1_OFFSET + 0,
     Keyboard = PIC1_OFFSET + 1,
+    XHCI = PIC1_OFFSET + 11,
     ApicTimer = 0x30,
     SysCall = 0x80,
 }
@@ -64,7 +66,12 @@ pub fn init_idt() {
     IDT.load();
 }
 
-extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {
+extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
+    debug!("XHCI Interrupt");
+    panic!("DIE");
+}
+
+extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();

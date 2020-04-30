@@ -88,7 +88,7 @@ impl PIT {
 
     fn read(&mut self) -> u16 {
         without_interrupts(|| {
-            let mut val = 0u16;
+            let mut val: u16;
             unsafe {
                 self.command.write(0b0);
                 val = self.channel0.read() as u16;
@@ -121,7 +121,7 @@ const MAX_SINGLE_WAIT_DURATION: Duration = Duration::from_millis(50);
 fn spin_wait_internal(d: Duration) {
     without_interrupts(||{
         GLOBAL_PIT.lock().setup(d, PITMode::SWStrobe);
-        let mut value = GLOBAL_PIT.lock().read();
+        let value = GLOBAL_PIT.lock().read();
         loop {
             let new_val = GLOBAL_PIT.lock().read();
             if new_val > value {

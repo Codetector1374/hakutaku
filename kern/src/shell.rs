@@ -181,12 +181,7 @@ impl Shell {
             "lsusb" => {
                 match &mut self.xhci {
                     Some(xhci) => {
-                        println!("[XHCI] Connected Devices");
-                        for i in 1..=xhci.max_ports() {
-                            if xhci.has_device(i) {
-                                println!("  > port: {}", i);
-                            }
-                        }
+                        xhci.poll_ports();
                     },
                     None => {
                         println!("XHCI Not Initialized");
@@ -196,41 +191,6 @@ impl Shell {
                 Ok(0)
             },
             "lspci" => {
-                let stuff = enumerate_pci_bus();
-
-                for dev in stuff {
-                    match dev.class.clone() {
-                        PCIDeviceClass::SerialBusController(c) => {
-                            match &c {
-                                PCISerialBusController::USBController(usb) => {
-                                    match usb {
-                                        PCISerialBusUSB::XHCI => {
-                                            if self.xhci.is_some() {
-                                                continue;
-                                            }
-                                            trace!("XHCI {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
-                                                     dev.device.bus,
-                                                     dev.device.device_number,
-                                                     dev.device.func,
-                                                     dev.header_type,
-                                                     dev.class,
-                                            );
-                                            let mut xhci = XHCI::from(dev.device);
-                                            debug!("Claiming Ownership...");
-                                            let result = xhci.transfer_ownership();
-                                            debug!("Ownership Result: {:?}", result);
-                                            xhci.setup_controller();
-                                            self.xhci = Some(xhci);
-                                        },
-                                        _ => {}
-                                    }
-                                },
-                                _ => {}
-                            }
-                        },
-                        _ => {}
-                    }
-                }
 
                 Ok(0)
             }

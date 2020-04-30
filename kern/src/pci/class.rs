@@ -48,7 +48,10 @@ pub enum PCIDeviceClass {
 }
 
 impl PCIDeviceClass {
-    pub fn from(class: u8, sub:u8, progif: u8) -> PCIDeviceClass {
+    pub fn from(class_group: u32) -> PCIDeviceClass {
+        let class = (class_group >> 16) as u8;
+        let sub = (class_group >> 8) as u8;
+        let progif = class_group as u8;
         match class {
             0x0C => SerialBusController(PCISerialBusController::from(sub, progif)),
             _ => Other(class, sub, progif)

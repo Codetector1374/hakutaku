@@ -15,6 +15,15 @@ pub mod timer;
 
 pub static GLOBAL_APIC: Mutex<APIC> = Mutex::new(APIC::uninitialized());
 
+#[repr(u8)]
+pub enum APICDeliveryMode {
+    Fixed = 0b000,
+    SMI = 0b010,
+    NMI = 0b100,
+    ExtINT = 0b111,
+    INIT = 0b101,
+}
+
 pub struct APIC {
     base_va: VirtAddr,
     base_pa: PhysAddr,
@@ -27,6 +36,7 @@ const APIC_OFFSET_SPURIOUS_LVT: u64 = 0xF0;
 const APIC_OFFSET_EOI: u64 = 0xB0;
 // Timers
 const APIC_OFFSET_TIMER_LVT: u64 = 0x320;
+const APIC_OFFSET_LINT0_LVT: u64 = 0x350;
 
 const APIC_OFFSET_TIMER_INITIAL: u64 = 0x380;
 const APIC_OFFSET_TIMER_CURRENT: u64 = 0x390;
@@ -165,6 +175,12 @@ impl APIC {
     pub fn timer_set_lvt(&mut self, vector: u8, mode: APICTimerMode, masked: bool) {
         let value: u32 = vector as u32 | (mode as u32) << 17 | (if masked { 1u32 } else { 0u32 }) << 16;
         let lol = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_TIMER_LVT) as *mut Volatile<u32>) };
+        lol.write(value);
+    }
+
+    pub fn lint0_set_lvt(&mut self, mode: APICDeliveryMode, masked: bool) {
+        let value: u32 = InterruptIndex::XHCI as u32 | (mode as u32) << 8 | (if masked { 1u32 } else { 0u32 }) << 16;
+        let lol = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_LINT0_LVT) as *mut Volatile<u32>) };
         lol.write(value);
     }
 }

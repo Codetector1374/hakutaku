@@ -9,14 +9,18 @@ use crate::memory::frame_allocator::FrameAllocWrapper;
 use core::ops::Add;
 use crate::pci::device::xhci::extended_capability::{ExtendedCapabilityTags, ExtendedCapabilityTag};
 use alloc::boxed::Box;
-use crate::pci::device::xhci::datastructure::{DeviceContextBaseAddressArray, CommandRingSegment};
+use crate::pci::device::xhci::datastructure::{DeviceContextBaseAddressArray, CommandRingSegment, EventRingSegment, EventRingSegmentTable, NormalTRB};
 use bitflags::_core::fmt::{Debug, Formatter};
 use alloc::vec::Vec;
-use crate::pci::device::xhci::port::XHCIPortGroup;
+use crate::pci::device::xhci::port::{XHCIPortGroup, XHCIPort, XHCIPortStatus, XHCIPortOperationalRegisters};
+use spin::Mutex;
+use crate::pci::device::xhci::port::XHCIPortStatus::{Disconnected, Active};
+use crate::pci::device::xhci::registers::{InterrupterRegisters, DoorBellRegister};
 
 pub mod extended_capability;
 pub mod port;
 mod datastructure;
+pub mod registers;
 
 #[derive(Debug)]
 pub struct XHCI {
@@ -27,7 +31,7 @@ pub struct XHCI {
     capability_regs: &'static mut XHCICapabilityRegisters,
     operational_regs: &'static mut XHCIOperationalRegisters,
     info: XHCIInfo,
-    ports: Vec<XHCIPortGroup>,
+    ports: Mutex<Vec<XHCIPortGroup>>,
 }
 
 #[derive(Default)]
@@ -39,6 +43,8 @@ pub struct XHCIInfo {
     max_port: u8,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     usb_cr: Option<Box<CommandRingSegment>>,
+    event_ring: Option<Box<EventRingSegment>>,
+    event_ring_table: Option<Box<EventRingSegmentTable>>,
 }
 
 impl Debug for XHCIInfo {
@@ -55,6 +61,20 @@ pub struct XHCICapabilityRegisters {
     hcc_param1: ReadOnly<u32>,
     doorbell_offset: ReadOnly<u32>,
     rts_offset: ReadOnly<u32>,
+}
+
+impl XHCICapabilityRegisters {
+    fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
+        let base_ptr = self as *const Self as u64;
+        let runtime_offset = self.rts_offset.read() as u64;
+        unsafe { &mut *((base_ptr + runtime_offset + (offset as u64 + 1) * 0x20) as *mut InterrupterRegisters) }
+    }
+
+    fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
+        let base_ptr = self as *const Self as u64;
+        let doorbell_offset = self.doorbell_offset.read() as u64;
+        unsafe {&mut *((base_ptr + doorbell_offset + (offset as u64 * 4)) as *mut DoorBellRegister)}
+    }
 }
 
 #[derive(Debug)]
@@ -80,28 +100,34 @@ impl XHCIOperationalRegisters {
         self as *mut Self
     }
 
-    pub fn get_port_base(&self, port: u8) -> usize {
-        (self as *const Self as usize) + 0x400 + 0x10 * (port as usize - 1)
+    pub fn get_port_operational_register(&self, port: u8) -> &'static mut XHCIPortOperationalRegisters {
+        unsafe { &mut *(((self as *const Self as usize) + 0x400 + 0x10 * (port as usize - 1)) as *mut XHCIPortOperationalRegisters) }
     }
 }
 
 impl From<PCIDevice> for XHCI {
     /// The caller is to ensure the passed in device is a XHCI device
     fn from(mut dev: PCIDevice) -> Self {
+        // Setup Interrupt Lines
+        dev.write_config_word(0xF, 11 | 0x1 << 8);
+        let interrupt = dev.read_config_dword(0xF);
+        let int_line = (interrupt >> 8) as u8;
+        let int_num = interrupt as u8;
+        debug!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
         // Bar0
         let size = dev.address_space_size();
         let base = dev.base_mmio_address(0).expect("xHCI is MMIO");
         let base_offset = base.as_u64() as usize & (4096 - 1);
         let alloc_base = base.align_down(4096u64);
-        trace!("XHCI Address: {:?}, size: {}, offset:{}", base, size, base_offset);
+        trace!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
         let va_root = without_interrupts(|| {
             let (va, size) = GMMIO_ALLOC.lock().allocate(size);
-            trace!("Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
+            trace!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
             let mut fallocw = FrameAllocWrapper {};
             for offset in (0..size).step_by(4096) {
                 let paddr = alloc_base + offset;
                 let vaddr = va + offset;
-                trace!("Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
+                trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
                 unsafe {
                     PAGE_TABLE.lock().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
@@ -114,10 +140,6 @@ impl From<PCIDevice> for XHCI {
             va
         });
         let mmio_vbase = va_root + base_offset;
-        without_interrupts(|| {
-            let base = PAGE_TABLE.lock().translate_addr(mmio_vbase).expect("phy");
-            info!("MMIO Phy Base: {:?}", base);
-        });
         let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
         let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
         let op_regs = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
@@ -129,7 +151,7 @@ impl From<PCIDevice> for XHCI {
             capability_regs: cap_regs,
             operational_regs: op_regs,
             info: Default::default(),
-            ports: Default::default(),
+            ports: Mutex::new(Default::default()),
         }.internal_initialize()
     }
 }
@@ -162,8 +184,45 @@ impl XHCI {
         // Populate info from HCSParams1
         let hcsparams1 = self.capability_regs.hcs_params[0].read();
         self.info.max_port = (hcsparams1 >> 24) as u8;
-        self.info.max_interrupt= (hcsparams1 >> 8) as u16;
+        self.info.max_interrupt = (hcsparams1 >> 8) as u16;
         self.info.max_slot = hcsparams1 as u8;
+
+        // Populate Slots
+
+        for t in self.extended_capability() {
+            match t {
+                ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
+                    let mut ports = self.ports.lock();
+                    for port in 0..port_count {
+                        let usbport = XHCIPort::new(port + port_offset);
+                        if major == 3 {
+                            if ports.len() > port as usize {
+                                let pg = ports.get_mut(port as usize).expect("has portgroup");
+                                assert!(pg.usb3_port.is_none());
+                                pg.usb3_port = Some(usbport);
+                            } else {
+                                assert_eq!(ports.len(), port as usize);
+                                let mut pg = XHCIPortGroup::default();
+                                pg.usb3_port = Some(usbport);
+                                ports.push(pg);
+                            }
+                        } else {
+                            if ports.len() > port as usize {
+                                let pg = ports.get_mut(port as usize).expect("has portgroup");
+                                assert!(pg.usb2_port.is_none());
+                                pg.usb2_port = Some(usbport);
+                            } else {
+                                assert_eq!(ports.len(), port as usize);
+                                let mut pg = XHCIPortGroup::default();
+                                pg.usb2_port = Some(usbport);
+                                ports.push(pg);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
 
         self
     }
@@ -172,19 +231,62 @@ impl XHCI {
         let val = self.capability_regs.hcc_param1.read();
         HCCFlags::from_bits_truncate(val)
     }
+    // pub fn ports(&self) -> &[XHCIPortGroup] {
+    //     self.ports.lock().as_slice()
+    // }
 
     pub fn max_ports(&self) -> u8 {
         self.info.max_port
     }
 
-    pub fn has_device(&self, port: u8) -> bool {
+    pub fn has_device(&self, p: &XHCIPort) -> bool {
+        let port = p.port_id;
         if port > 0 {
-            let port_base = self.operational_regs.get_port_base(port);
-            let base_val = unsafe { *(port_base as *const u32) };
+            let port_op = self.operational_regs.get_port_operational_register(port);
+            let base_val = port_op.portsc.read();
             base_val & 0x1 != 0
         } else {
             false
         }
+    }
+
+    pub fn poll_ports(&mut self) {
+        let poll_port = |p: &mut XHCIPort| {
+            let port_op = self.operational_regs.get_port_operational_register(p.port_id);
+            let connected = port_op.portsc.read() & 0x1 == 1;
+            match p.status {
+                XHCIPortStatus::Disconnected => {
+                    if connected {
+                        // Connect
+                        debug!("Connecting device on port: {}", p.port_id);
+                        p.status = Active;
+                    }
+                }
+                _ => {
+                    if !connected {
+                        debug!("Disconnecting device on port: {}", p.port_id);
+                        p.status = Disconnected;
+                    }
+                }
+            }
+        };
+
+        for port_group in self.ports.lock().iter_mut() {
+            if let Some(usb3) = &mut port_group.usb3_port {
+                poll_port(usb3);
+                if let XHCIPortStatus::Disconnected = XHCIPortStatus::Disconnected {} else {
+                    continue;
+                }
+            }
+            if let Some(usb2) = &mut port_group.usb2_port {
+                poll_port(usb2);
+            }
+        }
+
+        if self.capability_regs.get_runtime_interrupt_register(0).pending() {
+            debug!("Has Pending Interrupt on Ch0")
+        }
+
     }
 
     pub fn setup_controller(&mut self) {
@@ -195,6 +297,7 @@ impl XHCI {
             let dcbaa_pa = without_interrupts(|| {
                 PAGE_TABLE.lock().translate_addr(dcbaa_va).expect("Mapped")
             });
+            // DeviceContextBaseAddrArray
             trace!("[XHCI] dcbaaPA: {:?}", dcbaa_pa);
             if dcbaa_pa.as_u64() & 0b11_1111 != 0 {
                 panic!("Alignment issue");
@@ -226,19 +329,41 @@ impl XHCI {
         }
         trace!("[XHCI] CrCr setup");
 
+        // Setup Event Ring
+        self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
+        self.info.event_ring = Some(Box::new(EventRingSegment::default()));
+        // Setup the first entry
+        self.info.event_ring_table.as_mut().expect("table").segments[0].addr = self.info.event_ring.as_deref().expect("") as *const EventRingSegment as u64;
+        self.info.event_ring_table.as_mut().expect("table").segments[0].segment_size = 256;
+        // Load Table
+        let regs = self.capability_regs.get_runtime_interrupt_register(0);
+        regs.event_ring_seg_table_ptr.write(self.info.event_ring_table.as_deref().expect("lol") as *const EventRingSegmentTable as u64);
+        regs.flags.write(0x1 << 1); // Enable Interrupt
+
+
         self.operational_regs.config.write(self.info.max_slot as u32);
-        debug!("[XHCI] Setup USB Config with {} ports", self.info.max_slot);
+        debug!("[XHCI] Setup USB Config with {} slots", self.info.max_slot);
 
         // Hardcode value: Only N1 is valid. Refer to xhci manual 5.4.4
-        self.operational_regs.device_notification.write(0x2);
+        self.operational_regs.device_notification.write(0x1 << 1);
 
         debug!("Starting Controller...");
         // HostErrEnable | Interrupt EN | Host Rest | Run/Stop
         self.operational_regs.command.write(0b1101);
-
     }
 
-    pub fn extended_capability(&mut self) -> ExtendedCapabilityTags {
+    pub fn send_nop(&mut self) {
+        let cmd_ring = self.info.usb_cr.as_mut().expect("uninitialized");
+        for trb in cmd_ring.trbs.iter_mut() {
+            if !trb.active() {
+                *trb = NormalTRB::new_noop().into();
+                break;
+            }
+        }
+        self.capability_regs.get_doorbell_regster(0).reg.write(0);
+    }
+
+    pub fn extended_capability(&self) -> ExtendedCapabilityTags {
         // The higher 16bits specify the offset from base,
         // unit is **DWORD**
         let hcc1val = self.capability_regs.hcc_param1.read();
@@ -251,7 +376,7 @@ impl XHCI {
     pub fn transfer_ownership(&mut self) -> Result<(), XHCIError> {
         let tags = self.extended_capability().find(|t| {
             match t {
-                ExtendedCapabilityTag::USBLegacySupport{ head:_, bios_own:_, os_own :_} => true,
+                ExtendedCapabilityTag::USBLegacySupport { head: _, bios_own: _, os_own: _ } => true,
                 _ => false
             }
         });
@@ -267,10 +392,10 @@ impl XHCI {
                     // Now wait
                     // TODO implement timeout
                     while unsafe { read_ptr.read_volatile() } & 0x1 > 1 {}
-                    return Ok(())
+                    return Ok(());
                 }
                 panic!("wrong tag type found");
-            },
+            }
             _ => Err(XHCIError::NoLegacyTag)
         }
     }

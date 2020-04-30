@@ -82,8 +82,10 @@ impl ChainedPics {
         let mut wait_port: Port<u8> = Port::new(0x80);
         let mut wait = || { wait_port.write(0); };
 
-        let saved_mask1 = self.pics[0].data.read();
-        let saved_mask2 = self.pics[1].data.read();
+        let saved_mask1 = self.pics[0].data.read() & !0b100u8;
+        // let saved_mask2 = self.pics[1].data.read();
+        let saved_mask2 = 0;
+        debug!("PIC1 Mask: 0x{:x}, PIC2 Mask 0x{:x}", saved_mask1, saved_mask2);
 
         // Init Logic
         self.pics[0].command.write(ICW1_INIT | ICW1_ICW4);
@@ -137,6 +139,7 @@ impl ChainedPics {
         if self.handles_interrupt(int_id) {
             if self.pics[1].handles_interrupt(int_id) {
                 self.pics[1].unmask_interrupt(int_id);
+                self.pics[0].unmask_interrupt(self.pics[0].offset + 2);
             } else {
                 self.pics[0].unmask_interrupt(int_id);
             }

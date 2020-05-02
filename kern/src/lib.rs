@@ -187,7 +187,7 @@ pub extern fn usb_process() -> ! {
 
     let stuff = GLOBAL_PCI.lock().enumerate_pci_bus();
 
-    for mut dev in stuff {
+    for dev in stuff {
         match dev.info.class.clone() {
             PCIDeviceClass::SerialBusController(c) => {
                 match &c {
@@ -197,7 +197,7 @@ pub extern fn usb_process() -> ! {
                                 if xhci.is_some() {
                                     continue;
                                 }
-                                trace!("XHCI {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                                trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
                                        dev.bus,
                                        dev.device_number,
                                        dev.func,
@@ -205,9 +205,9 @@ pub extern fn usb_process() -> ! {
                                        dev.info.class,
                                 );
                                 let mut newxhci = XHCI::from(dev);
-                                debug!("Claiming Ownership...");
+                                debug!("[XHCI] Claiming Ownership...");
                                 let result = newxhci.transfer_ownership();
-                                debug!("Ownership Result: {:?}", result);
+                                debug!("[XHCI] Ownership Result: {:?}", result);
                                 newxhci.setup_controller();
                                 xhci = Some(newxhci);
                             },
@@ -221,15 +221,15 @@ pub extern fn usb_process() -> ! {
         }
     }
 
-    sleep(Duration::from_secs(1));
-    debug!("USB Controller Setup: {}", xhci.is_some());
-
+    xhci.as_mut().expect("xhci").poll_ports();
+    sleep(Duration::from_secs(1)).unwrap();
     xhci.as_mut().expect("").send_nop();
 
+
     loop {
-        // if xhci.is_some() {
-        //     xhci.as_mut().expect("xhci").poll_ports();
-            sleep(Duration::from_millis(100));
-        // }
+        if xhci.is_some() {
+            xhci.as_mut().expect("xhci").poll_ports();
+            sleep(Duration::from_millis(100)).unwrap();
+        }
     }
 }

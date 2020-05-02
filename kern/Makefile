@@ -5,7 +5,7 @@ iso := build/os-$(arch).iso
 rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU_ARGS ?= -no-reboot -cdrom $(iso) \
-						 -device nec-usb-xhci
+						 -device qemu-xhci
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg

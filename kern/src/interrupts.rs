@@ -12,6 +12,7 @@ use crate::interrupts::context_switch::{apic_timer, syscall_handler};
 use crate::hardware::pit::GLOBAL_PIT;
 use crate::memory::mmio_bump_allocator::MMIO_BASE;
 use keyboard::*;
+use crate::interrupts::InterruptIndex::XHCI;
 
 pub mod context_switch;
 mod keyboard;
@@ -30,7 +31,7 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
         idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(apic_timer as u64);
-        idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(syscall_handler as u64);
+        idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(xhci_handler as u64);
         idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
         idt
     };
@@ -68,7 +69,7 @@ pub fn init_idt() {
 
 extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
     debug!("XHCI Interrupt");
-    panic!("DIE");
+    // unsafe {PICS.lock().notify_end_of_interrupt(InterruptIndex::XHCI as u8) };
 }
 
 extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {

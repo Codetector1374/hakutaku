@@ -48,12 +48,16 @@ pub enum InterruptIndex {
 }
 
 impl InterruptIndex {
-    fn as_u8(self) -> u8 {
+    pub fn as_u8(self) -> u8 {
         self as u8
     }
 
-    fn as_usize(self) -> usize {
+    pub fn as_usize(self) -> usize {
         usize::from(self.as_u8())
+    }
+
+    pub fn as_offset(self) -> u8 {
+        self.as_u8() - PIC1_OFFSET
     }
 }
 
@@ -68,8 +72,9 @@ pub fn init_idt() {
 }
 
 extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
-    debug!("XHCI Interrupt");
-    // unsafe {PICS.lock().notify_end_of_interrupt(InterruptIndex::XHCI as u8) };
+    use crate::device::usb::interrupt::usb_interrupt_handler;
+    usb_interrupt_handler();
+    unsafe {PICS.lock().notify_end_of_interrupt(InterruptIndex::XHCI as u8) };
 }
 
 extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {

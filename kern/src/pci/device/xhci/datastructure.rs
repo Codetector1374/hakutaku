@@ -1,3 +1,5 @@
+use bitflags::_core::fmt::{Debug, Formatter};
+
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
     array: [u8; 2048]
@@ -81,6 +83,13 @@ pub struct NormalTRB {
     pub meta: u32,
 }
 
+impl Debug for NormalTRB {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        let type_id = (self.meta >> 10) & 0b111111;
+        write!(f, "NormalTRB {{ type: {} }}", type_id)
+    }
+}
+
 impl NormalTRB {
     pub fn new_noop() -> NormalTRB {
         NormalTRB {
@@ -116,7 +125,7 @@ const_assert_size!(SetupStageTRB, 16);
 #[derive(Copy, Clone)]
 pub union ControlTRB {
     setup: SetupStageTRB,
-    normal: NormalTRB,
+    pub normal: NormalTRB,
 }
 const_assert_size!(ControlTRB, 16);
 

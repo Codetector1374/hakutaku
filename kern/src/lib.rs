@@ -97,15 +97,15 @@ fn kern_init(boot_info: &BootInformation) {
     let multiboot_start = boot_info.start_address();
     let multiboot_end = multiboot_start + (boot_info.total_size() as usize);
 
-    let max_kern_mem = align_up(max(multiboot_end, kernel_end as usize), 1024*1024*2); // 2M
+    let max_kern_mem = align_up(max(multiboot_end, kernel_end as usize), 1024 * 1024 * 2); // 2M
     debug!("Kernel end 0x{:x}", max_kern_mem);
     // Unmap extra memory (Only kernel is kept)
-    for page_base in (max_kern_mem..1024*1024*1024).step_by(1024*1024*2) { // 1GB, 2MB
+    for page_base in (max_kern_mem..1024 * 1024 * 1024).step_by(1024 * 1024 * 2) { // 1GB, 2MB
         let mut res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
         match &mut res {
             Err(e) => {
                 warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
-            },
+            }
             _ => {}
         }
     }
@@ -122,7 +122,7 @@ fn kern_init(boot_info: &BootInformation) {
             seg_start = max_kern_mem;
         }
         trace!("[FALLOC] AddSeg: {:016X} - {:016X}", seg_start, seg_end);
-        without_interrupts(||{
+        without_interrupts(|| {
             FRAME_ALLOC.lock().add_segment(
                 MemorySegment::new(seg_start, seg_end - seg_start)
                     .expect("Unable to create")
@@ -179,57 +179,25 @@ pub extern fn lol() {
 }
 
 pub extern fn usb_process() -> ! {
-    use pci::GLOBAL_PCI;
-    use pci::class::*;
-    use pci::device::*;
+    use crate::device::usb::G_USB;
 
-    let mut xhci: Option<XHCI> = None;
-
-    let stuff = GLOBAL_PCI.lock().enumerate_pci_bus();
-
-    for dev in stuff {
-        match dev.info.class.clone() {
-            PCIDeviceClass::SerialBusController(c) => {
-                match &c {
-                    PCISerialBusController::USBController(usb) => {
-                        match usb {
-                            PCISerialBusUSB::XHCI => {
-                                if xhci.is_some() {
-                                    continue;
-                                }
-                                trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
-                                       dev.bus,
-                                       dev.device_number,
-                                       dev.func,
-                                       dev.info.header_type,
-                                       dev.info.class,
-                                );
-                                let mut newxhci = XHCI::from(dev);
-                                debug!("[XHCI] Claiming Ownership...");
-                                let result = newxhci.transfer_ownership();
-                                debug!("[XHCI] Ownership Result: {:?}", result);
-                                newxhci.setup_controller();
-                                xhci = Some(newxhci);
-                            },
-                            _ => {}
-                        }
-                    },
-                    _ => {}
-                }
-            },
-            _ => {}
-        }
-    }
-
-    xhci.as_mut().expect("xhci").poll_ports();
-    sleep(Duration::from_secs(1)).unwrap();
-    xhci.as_mut().expect("").send_nop();
-
-
+    without_interrupts(|| {
+        G_USB.initialize();
+        G_USB.xhci.lock().as_mut().expect("xhci").send_nop();
+    });
+    //
+    //
+    // loop {
+    //     if xhci.is_some() {
+    //         xhci.as_mut().expect("xhci").poll_ports();
+    //         sleep(Duration::from_millis(100)).unwrap();
+    //     }
+    // }
     loop {
-        if xhci.is_some() {
-            xhci.as_mut().expect("xhci").poll_ports();
-            sleep(Duration::from_millis(100)).unwrap();
-        }
+        without_interrupts(||{
+            G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
+        });
+        sleep(Duration::from_millis(100)).unwrap();
+        // x86_64::instructions::hlt();
     }
 }

@@ -12,6 +12,8 @@ use crate::SCHEDULER;
 use crate::hardware::pit::PIT;
 use kernel_api::syscall::sleep;
 use bitflags::_core::time::Duration;
+use crate::device::usb::G_USB;
+use x86_64::instructions::interrupts::without_interrupts;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -178,16 +180,10 @@ impl Shell {
                 });
                 Ok(0)
             }
-            "lsusb" => {
-                match &mut self.xhci {
-                    Some(xhci) => {
-                        xhci.poll_ports();
-                    },
-                    None => {
-                        println!("XHCI Not Initialized");
-                        return Ok(1)
-                    }
-                }
+            "u" => {
+                without_interrupts(||{
+                    G_USB.xhci.lock().as_mut().unwrap().send_nop();
+                });
                 Ok(0)
             },
             "lspci" => {

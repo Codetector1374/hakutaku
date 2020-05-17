@@ -10,7 +10,7 @@ use core::ops::Add;
 use crate::pci::device::xhci::extended_capability::{ExtendedCapabilityTags, ExtendedCapabilityTag};
 use alloc::boxed::Box;
 use crate::pci::device::xhci::datastructure::{DeviceContextBaseAddressArray, CommandRingSegment, EventRingSegment, EventRingSegmentTable, NormalTRB};
-use bitflags::_core::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Formatter};
 use alloc::vec::Vec;
 use crate::pci::device::xhci::port::{XHCIPortGroup, XHCIPort, XHCIPortStatus, XHCIPortOperationalRegisters};
 use spin::Mutex;
@@ -18,6 +18,10 @@ use crate::pci::device::xhci::port::XHCIPortStatus::{Disconnected, Active};
 use crate::pci::device::xhci::registers::{InterrupterRegisters, DoorBellRegister};
 use kernel_api::syscall::sleep;
 use core::time::Duration;
+use core::ops::{DerefMut, Deref};
+use crate::pci::PCIController;
+use crate::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
+use crate::interrupts::InterruptIndex;
 
 pub mod extended_capability;
 pub mod port;
@@ -65,20 +69,6 @@ pub struct XHCICapabilityRegisters {
     rts_offset: ReadOnly<u32>,
 }
 
-impl XHCICapabilityRegisters {
-    fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
-        let base_ptr = self as *const Self as u64;
-        let runtime_offset = self.rts_offset.read() as u64;
-        unsafe { &mut *((base_ptr + runtime_offset + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters) }
-    }
-
-    fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
-        let base_ptr = self as *const Self as u64;
-        let doorbell_offset = self.doorbell_offset.read() as u64;
-        unsafe { &mut *((base_ptr + doorbell_offset + (offset as u64 * 4)) as *mut DoorBellRegister) }
-    }
-}
-
 #[derive(Debug)]
 #[repr(C)]
 pub struct XHCIOperationalRegisters {
@@ -110,7 +100,8 @@ impl From<PCIDevice> for XHCI {
     /// The caller is to ensure the passed in device is a XHCI device
     fn from(mut dev: PCIDevice) -> Self {
         // Setup Interrupt Lines
-        dev.write_config_word(0xF, 11 | 0x1 << 8);
+        let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
+        dev.write_config_word(0xF, interrupt_number | 0x1 << 8);
         let interrupt = dev.read_config_dword(0xF);
         let int_line = (interrupt >> 8) as u8;
         let int_num = interrupt as u8;
@@ -182,6 +173,55 @@ pub enum XHCIError {
 }
 
 impl XHCI {
+    pub fn create_from_bus(c: impl Deref<Target=PCIController>) -> Option<XHCI> {
+        let bus = c.enumerate_pci_bus();
+        for dev in bus {
+            match dev.info.class.clone() {
+                PCIDeviceClass::SerialBusController(c) => {
+                    match &c {
+                        PCISerialBusController::USBController(usb) => {
+                            match usb {
+                                PCISerialBusUSB::XHCI => {
+                                    trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                                           dev.bus,
+                                           dev.device_number,
+                                           dev.func,
+                                           dev.info.header_type,
+                                           dev.info.class,
+                                    );
+                                    let mut newxhci = XHCI::from(dev);
+                                    debug!("[XHCI] Claiming Ownership...");
+                                    let result = newxhci.transfer_ownership();
+                                    debug!("[XHCI] Ownership Result: {:?}", result);
+                                    newxhci.setup_controller();
+                                    return Some(newxhci)
+                                },
+                                _ => {}
+                            }
+                        },
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+        debug!("[XHCI] No XHCI Controller Found");
+        None
+    }
+
+    fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
+        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
+        let runtime_offset = self.capability_regs.rts_offset.read() as u64;
+        unsafe { &mut *((base_ptr + runtime_offset + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters) }
+    }
+
+    fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
+        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
+        let doorbell_offset = self.capability_regs.doorbell_offset.read() as u64;
+        unsafe { &mut *((base_ptr + doorbell_offset + (offset as u64 * 4)) as *mut DoorBellRegister) }
+    }
+
+
     fn internal_initialize(mut self) -> Self {
         // Populate info from HCSParams1
         let hcsparams1 = self.capability_regs.hcs_params[0].read();
@@ -233,9 +273,6 @@ impl XHCI {
         let val = self.capability_regs.hcc_param1.read();
         HCCFlags::from_bits_truncate(val)
     }
-    // pub fn ports(&self) -> &[XHCIPortGroup] {
-    //     self.ports.lock().as_slice()
-    // }
 
     pub fn max_ports(&self) -> u8 {
         self.info.max_port
@@ -249,6 +286,21 @@ impl XHCI {
             base_val & 0x1 != 0
         } else {
             false
+        }
+    }
+
+    pub fn poll_interrupts(&mut self) {
+        if self.operational_regs.status.read() & 0x1 << 3 != 0 {
+            debug!("[XHCI] has interrupt");
+            self.operational_regs.status.write(0x1 << 3); // Clear Interrupt
+            if self.get_runtime_interrupt_register(0).pending() {
+                let int0_rs = self.get_runtime_interrupt_register(0);
+                debug!("[XHCI] Has Pending Interrupt on Ch0 (CMDRing): 0x{:x}", int0_rs.flags.read());
+                // self.info.event_ring.unwrap().
+                int0_rs.flags.write(int0_rs.flags.read() | 0x1); // Clear Interrupt
+                let trb = unsafe { self.info.event_ring.as_ref().unwrap().trbs[0].normal };
+                debug!("[XHCI] Event: {:x?}", trb);
+            }
         }
     }
 
@@ -283,11 +335,6 @@ impl XHCI {
             if let Some(usb2) = &mut port_group.usb2_port {
                 poll_port(usb2);
             }
-        }
-
-        if self.capability_regs.get_runtime_interrupt_register(0).pending() {
-            debug!("[XHCI] Has Pending Interrupt on Ch0");
-            self.capability_regs.get_runtime_interrupt_register(0).flags.write(0x1 << 0);
         }
     }
 
@@ -353,7 +400,7 @@ impl XHCI {
         self.info.event_ring_table.as_mut().expect("table").segments[0].segment_size = 256;
 
         // Interrupt Registers
-        let int_regs = self.capability_regs.get_runtime_interrupt_register(0);
+        let int_regs = self.get_runtime_interrupt_register(0);
         // Load Event Ring Dequeue Pointer Register
         int_regs.event_ring_deque_ptr.write(dequeue_pa | 0b1000);
 
@@ -393,7 +440,7 @@ impl XHCI {
             let crcr_ptr = self.info.usb_cr.as_deref().expect("thing") as *const CommandRingSegment;
             let crcr_va = VirtAddr::new(crcr_ptr as u64);
             let crcr_pa = without_interrupts(|| {
-                PAGE_TABLE.lock().translate_addr(crcr_va).expect("Mapped")
+                PAGE_TABLE.lock().translate_addr(crcr_va).expect("Unmapped")
             });
             debug!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
             if self.operational_regs.command_ring_control.read() & 0b1000 == 0 {
@@ -426,8 +473,7 @@ impl XHCI {
                 break;
             }
         }
-        self.capability_regs.get_doorbell_regster(0).reg.write(0);
-        debug!("CRCR Status: 0x{:x}", self.operational_regs.command_ring_control.read());
+        self.get_doorbell_regster(0).reg.write(0);
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

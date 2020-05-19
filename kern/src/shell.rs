@@ -183,6 +183,7 @@ impl Shell {
             "u" => {
                 without_interrupts(||{
                     G_USB.xhci.lock().as_mut().unwrap().send_nop();
+
                 });
                 Ok(0)
             },

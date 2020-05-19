@@ -31,7 +31,7 @@ clean:
 
 usb: $(iso)
 	@qemu-system-x86_64 $(QEMU_ARGS) -drive id=my_usb_disk,file=./ext/mbr.img,if=none \
-				    -device usb-storage,drive=my_usb_disk
+				    -device usb-storage,drive=my_usb_disk,id=usb0
 
 run: $(iso)
 	@qemu-system-x86_64 $(QEMU_ARGS)

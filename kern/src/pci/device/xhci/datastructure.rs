@@ -95,9 +95,25 @@ impl NormalTRB {
         NormalTRB {
             data_block: 0,
             interrupter_td_trblen: 0,
-            meta: 1 << 0 | 23 << 10,
+            meta: 23 << 10 | 0x1,
         }
     }
+
+    pub fn end_queue() -> NormalTRB {
+        NormalTRB {
+            data_block: 0,
+            interrupter_td_trblen: 0,
+            meta: 0x1 << 0
+        }
+    }
+
+    // pub fn set_cycle_bit(&mut self, val: bool) {
+    //     if val {
+    //         self.meta |= 0x1 << 0;
+    //     } else {
+    //         self.meta &= !(0x1 << 0);
+    //     }
+    // }
 }
 
 #[repr(C)]

@@ -49,6 +49,7 @@ pub struct XHCIInfo {
     max_port: u8,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     usb_cr: Option<Box<CommandRingSegment>>,
+    command_ring_enqueue_ptr: usize,
     event_ring: Option<Box<EventRingSegment>>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
 }
@@ -77,7 +78,7 @@ pub struct XHCIOperationalRegisters {
     /// Page size is 2^(n+12), n being the value read
     page_size: ReadOnly<u32>,
     _res1: [u32; 2],
-    device_notification: Volatile<u32>,
+    dnctlr: Volatile<u32>,
     /// 63:6 pointer | 5:4 res | Command Ring Running
     /// | Command Abort | Command Stop | RingCycleState
     command_ring_control: Volatile<u64>,
@@ -194,14 +195,14 @@ impl XHCI {
                                     let result = newxhci.transfer_ownership();
                                     debug!("[XHCI] Ownership Result: {:?}", result);
                                     newxhci.setup_controller();
-                                    return Some(newxhci)
-                                },
+                                    return Some(newxhci);
+                                }
                                 _ => {}
                             }
-                        },
+                        }
                         _ => {}
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -290,6 +291,16 @@ impl XHCI {
     }
 
     pub fn poll_interrupts(&mut self) {
+        let current_status = self.operational_regs.status.read();
+        if current_status & 0x4 != 0 {
+            debug!("[XHCI] Int: Host Error");
+        }
+        if current_status & 0x8 != 0 {
+            debug!("[XHCI] Int: Event Interrupt");
+        }
+        if current_status & 0x10 != 0 {
+            debug!("[XHCI] Int: Port Interrupt");
+        }
         if self.operational_regs.status.read() & 0x1 << 3 != 0 {
             debug!("[XHCI] has interrupt");
             self.operational_regs.status.write(0x1 << 3); // Clear Interrupt
@@ -386,7 +397,7 @@ impl XHCI {
         debug!("[XHCI] Setup USB Config with {} slots", self.info.max_slot);
 
         // Hardcode value: Only N1 is valid. Refer to xhci manual 5.4.4
-        self.operational_regs.device_notification.write(0b1111);
+        self.operational_regs.dnctlr.write(0x2);
 
         // Setup Event Ring & Table
         self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
@@ -461,18 +472,16 @@ impl XHCI {
 
         let cmd_ring_status = self.operational_regs.command_ring_control.read();
         debug!("[XHCI] CRCR Value: {:x}", cmd_ring_status);
-
     }
 
     pub fn send_nop(&mut self) {
         let cmd_ring = self.info.usb_cr.as_mut().expect("uninitialized");
-        for (id, trb) in cmd_ring.trbs.iter_mut().enumerate() {
-            if !trb.active() {
-                debug!("Writing NoOp in {}", id);
-                *trb = NormalTRB::new_noop().into();
-                break;
-            }
-        }
+        debug!("[XHCI] Sending NOOP on index {}", self.info.command_ring_enqueue_ptr);
+        let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
+        *target = NormalTRB::new_noop().into();
+        self.info.command_ring_enqueue_ptr += 1;
+        // let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
+        // *target = NormalTRB::end_queue().into();
         self.get_doorbell_regster(0).reg.write(0);
     }
 

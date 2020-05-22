@@ -31,6 +31,8 @@ use crate::process::scheduler::GlobalScheduler;
 use crate::process::process::Process;
 use crate::pci::device::xhci::XHCI;
 use kernel_api::syscall::sleep;
+use crate::pci::GLOBAL_PCI;
+use crate::device::ahci::G_AHCI;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -164,8 +166,14 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     kern_init(&boot_info);
     // Must initialize after allocator
     hardware::keyboard::initialize();
-
+    GLOBAL_PCI.lock().scan_pci_bus();
     println!("Kern started");
+    // Load the first process
+    let mut main_proc = Process::new();
+    main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
+    main_proc.context.rip = lol as u64;
+    SCHEDULER.add(main_proc);
+    // Usb Proc
     let usbproc = Process::new_kern(usb_process as u64);
     SCHEDULER.add(usbproc);
     SCHEDULER.start();
@@ -179,6 +187,7 @@ pub extern fn lol() {
 }
 
 pub extern fn usb_process() -> ! {
+    G_AHCI.initialize();
     loop {
         x86_64::instructions::hlt()
     }

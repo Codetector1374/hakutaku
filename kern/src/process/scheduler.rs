@@ -97,13 +97,6 @@ impl GlobalScheduler {
     /// Initializes the scheduler and add userspace processes to the Scheduler.
     pub unsafe fn initialize(&self) {
         self.0.lock().replace(Scheduler::new());
-
-        // Load the first process
-
-        let mut proc1 = Process::new();
-        proc1.context.rsp = proc1.stack.as_ref().unwrap().top().as_u64();
-        proc1.context.rip = lol as u64;
-        self.0.lock().as_mut().unwrap().add(proc1);
     }
 }
 

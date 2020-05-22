@@ -187,11 +187,16 @@ impl Shell {
                 Ok(0)
             },
             "lspci" => {
-                without_interrupts(||{
-                    for dev in GLOBAL_PCI.lock().enumerate_pci_bus().iter() {
-                        debug!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                let scan = command.args.len() >= 2 && command.args[1].eq("-s");
+                let devs = without_interrupts(||{
+                    if scan {
+                        GLOBAL_PCI.lock().scan_pci_bus();
                     }
+                    GLOBAL_PCI.lock().enumerate_pci_bus()
                 });
+                for dev in &devs {
+                    println!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                }
                 Ok(0)
             }
             "exit" => {

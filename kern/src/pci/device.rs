@@ -55,7 +55,7 @@ impl PCIPorts {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PCIDevice {
     pub bus: u8,
     pub device_number: u8,

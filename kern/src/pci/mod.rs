@@ -7,11 +7,15 @@ use spin::Mutex;
 pub mod device;
 pub mod class;
 
-pub static GLOBAL_PCI: Mutex<PCIController> = Mutex::new(PCIController {});
+pub static GLOBAL_PCI: Mutex<PCIController> = Mutex::new(PCIController {
+    devices: None
+});
 
-pub struct PCIController {}
+pub struct PCIController {
+    devices: Option<Vec<PCIDevice>>
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PCIError {
     SlotNumber,
     FuncNumber,
@@ -19,7 +23,7 @@ pub enum PCIError {
     InvalidDevice,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum PCICapabilityID {
     PowerManagement,
     AGP,
@@ -67,7 +71,7 @@ impl From<u8> for PCICapabilityID {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PCICapability {
     pub id: PCICapabilityID,
     /// Byte based address
@@ -83,7 +87,7 @@ impl PCICapability {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PCIDeviceInfo {
     pub class: PCIDeviceClass,
     pub rev: u8,
@@ -109,9 +113,17 @@ impl PCIDeviceInfo {
 
 impl PCIController {
     pub fn enumerate_pci_bus(&self) -> Vec<PCIDevice> {
+        if let Some(dev) = self.devices.as_ref() {
+            return dev.clone()
+        }
+        panic!("PCI Bus is never scanned");
+    }
+
+    pub fn scan_pci_bus(&mut self) {
+        debug!("[PCI] Scanning PCI Bus");
         let mut bus = Vec::<PCIDevice>::with_capacity(16);
         self.enumerate_bus(0, &mut bus);
-        bus
+        self.devices = Some(bus);
     }
 
     fn enumerate_bus(&self, bus: u8, vec: &mut Vec<PCIDevice>) {

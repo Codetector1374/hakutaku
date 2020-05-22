@@ -4,8 +4,11 @@ target ?= $(arch)-unknown-none
 iso := build/os-$(arch).iso
 rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
-QEMU_ARGS ?= -no-reboot -cdrom $(iso) \
-						 -device qemu-xhci
+QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
+						 -boot order=d \
+						 -device qemu-xhci \
+						 -drive id=main_disk,file=ext/demo.img,if=none \
+						 -device ide-hd,drive=main_disk \
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg

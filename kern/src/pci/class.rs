@@ -1,4 +1,4 @@
-use crate::pci::class::PCIDeviceClass::{Other, SerialBusController};
+use crate::pci::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController};
 use crate::pci::class::PCISerialBusController::{FireWire, ACCESSBus, SSA, USBController, FibreChannel};
 use crate::pci::class::PCISerialBusUSB::{UHCI, OHCI, EHCI, XHCI, Device};
 use cpuio::UnsafePort;
@@ -53,6 +53,7 @@ impl PCIDeviceClass {
         let sub = (class_group >> 8) as u8;
         let progif = class_group as u8;
         match class {
+            0x01 => MassStorageController(PCIClassMassStorage::from(sub,progif)),
             0x0C => SerialBusController(PCISerialBusController::from(sub, progif)),
             _ => Other(class, sub, progif)
         }
@@ -67,11 +68,35 @@ pub enum PCIClassMassStorage {
     IPIBusController,
     RAIDController,
     ATAController(u8),
-    SATA(u8),
+    SATA(PCIClassMassStroageSATA),
     SAS(u8),
     NonVolatileMemory(u8),
     Other(u8),
     Unknown(u8, u8)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PCIClassMassStroageSATA {
+    AHCI,
+    Other(u8)
+}
+
+impl PCIClassMassStroageSATA {
+    pub fn from(prog_if: u8) -> PCIClassMassStroageSATA {
+        match prog_if {
+            0x1 => PCIClassMassStroageSATA::AHCI,
+            _ => PCIClassMassStroageSATA::Other(prog_if),
+        }
+    }
+}
+
+impl PCIClassMassStorage {
+    pub fn from(sub: u8, prog_if: u8) -> PCIClassMassStorage {
+        match sub {
+            0x06 => PCIClassMassStorage::SATA(PCIClassMassStroageSATA::from(prog_if)),
+            _ => PCIClassMassStorage::Unknown(sub, prog_if),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

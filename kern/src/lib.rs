@@ -179,25 +179,7 @@ pub extern fn lol() {
 }
 
 pub extern fn usb_process() -> ! {
-    use crate::device::usb::G_USB;
-
-    without_interrupts(|| {
-        G_USB.initialize();
-        G_USB.xhci.lock().as_mut().expect("xhci").send_nop();
-    });
-    //
-    //
-    // loop {
-    //     if xhci.is_some() {
-    //         xhci.as_mut().expect("xhci").poll_ports();
-    //         sleep(Duration::from_millis(100)).unwrap();
-    //     }
-    // }
     loop {
-        without_interrupts(||{
-            G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
-        });
-        sleep(Duration::from_millis(100)).unwrap();
-        // x86_64::instructions::hlt();
+        x86_64::instructions::hlt()
     }
 }

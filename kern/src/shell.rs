@@ -183,12 +183,15 @@ impl Shell {
             "u" => {
                 without_interrupts(||{
                     G_USB.xhci.lock().as_mut().unwrap().send_nop();
-
                 });
                 Ok(0)
             },
             "lspci" => {
-
+                without_interrupts(||{
+                    for dev in GLOBAL_PCI.lock().enumerate_pci_bus().iter() {
+                        debug!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                    }
+                });
                 Ok(0)
             }
             "exit" => {

@@ -77,7 +77,7 @@ impl AHCIHBAPort {
         let val = self.CI.read();
         for i in 0..32u8 {
             if (val >> i) & 0x1 == 0 {
-               return Some(i)
+                return Some(i);
             }
         }
         None
@@ -171,7 +171,7 @@ impl AHCIController {
                 ports: [AHCIHBAPortStatus::default(); 32],
                 command_lists: [None; 32],
                 fis_list: [None; 32],
-                cmd_tables: Default::default()
+                cmd_tables: Default::default(),
             };
             controller.internal_initialize();
             return Some(controller);
@@ -296,9 +296,12 @@ impl AHCIController {
     }
 
     fn test(&mut self, port: u8) {
+        use pretty_hex::*;
         let mut buf = [0u16; 256];
         self.read_sector(port, 0, &mut buf);
-        println!("Last Two Bytes {:x}", buf[255]);
+        let buf2: [u8; 512] = unsafe { core::mem::transmute(buf) };
+        println!("Last Two Bytes {:x} {:x}", buf2[510], buf2[511]);
+        println!("First Sector: \n{:?}", buf2.as_ref().hex_dump());
     }
 
     fn read_sector(&mut self, port: u8, sector: u64, buf: &mut [u16]) {

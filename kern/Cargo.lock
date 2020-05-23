@@ -58,6 +58,7 @@ dependencies = [
  "log",
  "multiboot2",
  "pc-keyboard",
+ "pretty-hex",
  "spin",
  "stack-vec",
  "volatile",
@@ -100,6 +101,12 @@ name = "pc-keyboard"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c48392db76c4e9a69e0b3be356c5f97ebb7b14413c5e4fd0af4755dbf86e2fce"
+
+[[package]]
+name = "pretty-hex"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be91bcc43e73799dc46a6c194a55e7aae1d86cc867c860fd4a436019af21bd8c"
 
 [[package]]
 name = "spin"

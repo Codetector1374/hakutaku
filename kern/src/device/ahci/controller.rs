@@ -11,6 +11,7 @@ use kernel_api::syscall::sleep;
 use core::time::Duration;
 use alloc::boxed::Box;
 use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType};
+use crate::hardware::pit::PIT;
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -309,28 +310,6 @@ impl AHCIController {
             cmd_header.ctba = cmd_tbl_pa;
         }
 
-        // regs.ports[port as usize].SCTL.write(0x1);
-        // sleep(Duration::from_millis(50)).expect("slept");
-        //
-        // if regs.generic_control.CAP.read() >> 27 & 0x1 == 1 {
-        //     let val = regs.ports[port as usize].CMD.read();
-        //     debug!("[AHCI] Support SSS, current CMD: {:032b}", val);
-        //     // ICC Active | PowerOnDevice | SpinUpDevice
-        //     regs.ports[port as usize].CMD.write(val | 0x1 << 28 | 0x1 << 1 | 0x1 << 2);
-        //     sleep(Duration::from_millis(10)).expect("slept");
-        // }
-        // loop {
-        //     let status = regs.ports[port as usize].SSTS.read();
-        //     let dev_detect = (status & 0xF) as u8;
-        //     let dev_spd = (status >> 4 & 0xF) as u8;
-        //     let dev_pm = (status >> 8) as u8;
-        //     debug!("[AHCI] SSTS after Rest: {}, {}, {}", dev_detect, dev_spd, dev_pm);
-        //     if dev_pm == 1 {
-        //         break;
-        //     }
-        //     sleep(Duration::from_secs(1)).expect("slept");
-        // }
-
         self.start_port_cmd(port);
         debug!("[AHCI] Command Table Initialized");
     }
@@ -351,7 +330,7 @@ impl AHCIController {
         debug!("[AHCI] read_sector: free slot: {}", slot);
         let cmd_header = &mut self.command_lists[port as usize].as_mut().expect("").commands[slot as usize];
         // D2H FIS is 4 DWORDs
-        cmd_header.flags = 0x4; // 4 DWORDs
+        cmd_header.flags = 0x1 << 10 | 0x4; // 4 DWORDs
         cmd_header.prdtl = 1;
 
         let cmd_tbl = self.cmd_tables[port as usize].cmd_tables[slot as usize].as_mut().expect("lol").as_mut();
@@ -369,19 +348,30 @@ impl AHCIController {
         cmd_tbl.cfis.device = 1 << 6; // LBA Mode
         cmd_tbl.cfis.count = 1;
 
+        let timeout_target = PIT::current_time() + Duration::from_secs(5);
         while hba_port.TFD.read() & 0b10001000 != 0 {
             sleep(Duration::from_micros(1)).expect("slept");
             trace!("[AHCI] Waiting on ctlr to idle");
+            if PIT::current_time() > timeout_target {
+                error!("[AHCI] timeout waiting for device to idle");
+                error!("[AHCI] TFD Status: {:032b}", hba_port.TFD.read());
+                panic!("AHCI Timeout");
+            }
         }
 
         hba_port.CI.write(0x1u32 << slot as u32);
         debug!("[AHCI] Issued Read Command");
+        let timeout_target = PIT::current_time() + Duration::from_secs(5);
         loop {
             if hba_port.CI.read() >> slot as u32 & 0x1 == 0 {
                 break;
             }
             if hba_port.IS.read() >> 30 & 0x1 == 1 {
                 error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
+                return;
+            }
+            if PIT::current_time() >= timeout_target {
+                error!("[AHCI] Read timeout");
                 return;
             }
         }
@@ -400,10 +390,17 @@ impl AHCIController {
         }
         let value = regs.ports[port as usize].CMD.read();
         // Set bit 4 (FIS Recv EN) & bit 0 (Start)
-        regs.ports[port as usize].CMD.write(value | 0x1 << 4);
+        regs.ports[port as usize].CMD.write(value | 0x1 << 4 | 0b110);
         sleep(Duration::from_millis(50)).expect("slept");
         debug!("[AHCI] Port {} CMD  : {:032b}", port, regs.ports[port as usize].CMD.read());
         // Have to be two operation per documentation
+        // Before we write ST, let's do a CLO if the thing is busy
+        if regs.ports[port as usize].TFD.read() >> 7 & 0x1 == 1{
+            debug!("[AHCI] Port {} busy before start", port);
+            let value = regs.ports[port as usize].CMD.read();
+            regs.ports[port as usize].CMD.write(value | 01 << 3);
+            while regs.ports[port as usize].CMD.read() >> 3 & 0x1 == 1 {}
+        }
         let value = regs.ports[port as usize].CMD.read();
         regs.ports[port as usize].CMD.write(value | 0x1 << 0);
         sleep(Duration::from_millis(50)).expect("slept");

@@ -189,6 +189,7 @@ impl Shell {
             "lspci" => {
                 let scan = command.args.len() >= 2 && command.args[1].eq("-s");
                 let devs = without_interrupts(||{
+                    debug!("Locking PCI Controller");
                     if scan {
                         GLOBAL_PCI.lock().scan_pci_bus();
                     }

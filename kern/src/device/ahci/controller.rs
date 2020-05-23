@@ -226,7 +226,7 @@ impl AHCIController {
                     PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("va_align"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("pa_align"),
-                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
+                        PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::PRESENT,
                         &mut fallocw,
                     ).expect("mapped").flush();
                 }
@@ -237,6 +237,11 @@ impl AHCIController {
         self.regs = Some(unsafe { &mut *(regs_va.as_mut_ptr()) });
 
         self.transfer_control();
+        let regs = self.regs.as_mut().expect("some");
+        if regs.generic_control.GHC.read() >> 31 & 0x1 != 1 {
+            debug!("[AHCI] Legacy Mode detected");
+            regs.generic_control.GHC.write(1 << 31);
+        }
 
         let ports = self.port_count();
         let ver = self.version();
@@ -261,8 +266,20 @@ impl AHCIController {
         }
     }
 
+    fn reset_port(&mut self, port: u8) {
+        let regs = self.regs.as_mut().expect("");
+        regs.ports[port as usize].SCTL.write(0x701);
+        sleep(Duration::from_millis(2)).expect("slept");
+        regs.ports[port as usize].SCTL.write(0x700);
+        while regs.ports[port as usize].SSTS.read() & 0xF != 0x3 {
+            sleep(Duration::from_millis(1)).expect("slept");
+        }
+        debug!("[AHCI] Device Reset");
+    }
+
     pub fn setup_port(&mut self, port: u8) {
         self.stop_port_cmd(port);
+        self.reset_port(port);
         let regs = self.regs.as_mut().expect("");
         debug!("[AHCI] Command Engine Stopped");
         self.command_lists[port as usize].replace(Box::new(CommandList::default()));
@@ -291,6 +308,29 @@ impl AHCIController {
             });
             cmd_header.ctba = cmd_tbl_pa;
         }
+
+        // regs.ports[port as usize].SCTL.write(0x1);
+        // sleep(Duration::from_millis(50)).expect("slept");
+        //
+        // if regs.generic_control.CAP.read() >> 27 & 0x1 == 1 {
+        //     let val = regs.ports[port as usize].CMD.read();
+        //     debug!("[AHCI] Support SSS, current CMD: {:032b}", val);
+        //     // ICC Active | PowerOnDevice | SpinUpDevice
+        //     regs.ports[port as usize].CMD.write(val | 0x1 << 28 | 0x1 << 1 | 0x1 << 2);
+        //     sleep(Duration::from_millis(10)).expect("slept");
+        // }
+        // loop {
+        //     let status = regs.ports[port as usize].SSTS.read();
+        //     let dev_detect = (status & 0xF) as u8;
+        //     let dev_spd = (status >> 4 & 0xF) as u8;
+        //     let dev_pm = (status >> 8) as u8;
+        //     debug!("[AHCI] SSTS after Rest: {}, {}, {}", dev_detect, dev_spd, dev_pm);
+        //     if dev_pm == 1 {
+        //         break;
+        //     }
+        //     sleep(Duration::from_secs(1)).expect("slept");
+        // }
+
         self.start_port_cmd(port);
         debug!("[AHCI] Command Table Initialized");
     }
@@ -301,7 +341,7 @@ impl AHCIController {
         self.read_sector(port, 0, &mut buf);
         let buf2: [u8; 512] = unsafe { core::mem::transmute(buf) };
         println!("Last Two Bytes {:x} {:x}", buf2[510], buf2[511]);
-        println!("First Sector: \n{:?}", buf2.as_ref().hex_dump());
+        // println!("First Sector: \n{:?}", buf2.as_ref().hex_dump());
     }
 
     fn read_sector(&mut self, port: u8, sector: u64, buf: &mut [u16]) {
@@ -311,7 +351,7 @@ impl AHCIController {
         debug!("[AHCI] read_sector: free slot: {}", slot);
         let cmd_header = &mut self.command_lists[port as usize].as_mut().expect("").commands[slot as usize];
         // D2H FIS is 4 DWORDs
-        cmd_header.flags = 0x3; // 4 DWORDs
+        cmd_header.flags = 0x4; // 4 DWORDs
         cmd_header.prdtl = 1;
 
         let cmd_tbl = self.cmd_tables[port as usize].cmd_tables[slot as usize].as_mut().expect("lol").as_mut();
@@ -324,14 +364,14 @@ impl AHCIController {
 
         cmd_tbl.cfis.fis_type = FISType::RegH2d;
         cmd_tbl.cfis.flags = 0x1 << 7;
-        cmd_tbl.cfis.command = 0xC8; // Read DMA (Non Ext: 256 sectors max)
+        cmd_tbl.cfis.command = 0x25; // Read DMA (Non Ext: 256 sectors max)
         cmd_tbl.cfis.set_lba(sector);
         cmd_tbl.cfis.device = 1 << 6; // LBA Mode
         cmd_tbl.cfis.count = 1;
 
         while hba_port.TFD.read() & 0b10001000 != 0 {
             sleep(Duration::from_micros(1)).expect("slept");
-            debug!("[AHCI] Waiting on ctlr to idle");
+            trace!("[AHCI] Waiting on ctlr to idle");
         }
 
         hba_port.CI.write(0x1u32 << slot as u32);
@@ -339,6 +379,10 @@ impl AHCIController {
         loop {
             if hba_port.CI.read() >> slot as u32 & 0x1 == 0 {
                 break;
+            }
+            if hba_port.IS.read() >> 30 & 0x1 == 1 {
+                error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
+                return;
             }
         }
         if hba_port.IS.read() >> 30 & 0x1 == 1 {
@@ -357,10 +401,13 @@ impl AHCIController {
         let value = regs.ports[port as usize].CMD.read();
         // Set bit 4 (FIS Recv EN) & bit 0 (Start)
         regs.ports[port as usize].CMD.write(value | 0x1 << 4);
+        sleep(Duration::from_millis(50)).expect("slept");
+        debug!("[AHCI] Port {} CMD  : {:032b}", port, regs.ports[port as usize].CMD.read());
         // Have to be two operation per documentation
         let value = regs.ports[port as usize].CMD.read();
         regs.ports[port as usize].CMD.write(value | 0x1 << 0);
-        debug!("[AHCI] Port {} started", port);
+        sleep(Duration::from_millis(50)).expect("slept");
+        debug!("[AHCI] Port {} start: {:032b}", port, regs.ports[port as usize].CMD.read());
     }
 
     /// Stop Command Engine on port
@@ -368,11 +415,14 @@ impl AHCIController {
         let regs = self.regs.as_mut().expect("");
         let val = regs.ports[port as usize].CMD.read();
         // Clear bit 0 (Start)
-        regs.ports[port as usize].CMD.write(val & (!0b10001));
-
-        // Wait for bit 14 & 15 clear
-        while (regs.ports[port as usize].CMD.read() & (0b11 << 14)) != 0 {
-            debug!("current Value: {:032b}", regs.ports[port as usize].CMD.read());
+        regs.ports[port as usize].CMD.write(val & (!0b1));
+        while regs.ports[port as usize].CMD.read() >> 15 & 0x1 != 0 {
+            sleep(Duration::from_micros(1)).expect("slept");
+        }
+        // Clear bit 4
+        let val = regs.ports[port as usize].CMD.read();
+        regs.ports[port as usize].CMD.write(val & (!0b10000));
+        while regs.ports[port as usize].CMD.read() >> 14 & 0x1 != 0 {
             sleep(Duration::from_micros(1)).expect("slept");
         }
     }

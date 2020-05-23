@@ -34,6 +34,7 @@ use crate::pci::device::xhci::XHCI;
 use kernel_api::syscall::sleep;
 use crate::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
+use x86_64::registers::control::Cr0Flags;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -83,7 +84,6 @@ pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
 
 fn kern_init(boot_info: &BootInformation) {
-
     gdt::init();
     interrupts::init_idt();
     unsafe {
@@ -168,6 +168,13 @@ fn kern_init(boot_info: &BootInformation) {
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+
+    // // Disable Cache
+    // let cr0 = x86_64::registers::control::Cr0::read();
+    // debug!("CR0: {:?}", cr0);
+    // unsafe { x86_64::registers::control::Cr0::write(cr0 | Cr0Flags::CACHE_DISABLE) };
+    // x86_64::instructions::cache::wbinvd();
+
     kern_init(&boot_info);
     // Must initialize after allocator
     hardware::keyboard::initialize();

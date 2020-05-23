@@ -1,6 +1,7 @@
 use volatile::Volatile;
 use alloc::boxed::Box;
 use x86_64::PhysAddr;
+use x86_64::instructions::cache::wbinvd;
 
 #[repr(u8)]
 pub enum FISType {
@@ -17,28 +18,40 @@ pub enum FISType {
 
 #[repr(C)]
 pub struct FISRegH2D {
-    fis_type: FISType,
-    flags: u8,
-    command: u8,
-    feature_l: u8,
+    pub fis_type: FISType,
+    pub flags: u8,
+    pub command: u8,
+    pub feature_l: u8,
     // DW1
     lba0: u8,
     lba1: u8,
     lba2: u8,
-    device: u8,
+    pub device: u8,
 
     //DW2
     lba3: u8,
     lba4: u8,
     lba5: u8,
-    feature_h: u8,
+    pub feature_h: u8,
 
     //DW3
-    count: u16,
-    icc: u8,
-    ctrl: u8,
+    pub count: u16,
+    pub icc: u8,
+    pub ctrl: u8,
     // DW4
     _res0: u32
+}
+
+impl FISRegH2D {
+    pub fn set_lba(&mut self, lba: u64) {
+        assert!(lba < 1<<48, "LBA is limited to 48 bits");
+        self.lba0 = (lba >> 0) as u8;
+        self.lba1 = (lba >> 8) as u8;
+        self.lba2 = (lba >> 16) as u8;
+        self.lba3 = (lba >> 24) as u8;
+        self.lba4 = (lba >> 32) as u8;
+        self.lba5 = (lba >> 40) as u8;
+    }
 }
 
 #[repr(C, align(256))]
@@ -124,7 +137,7 @@ impl Default for CommandTable {
 #[repr(C)]
 pub struct PRDTEntry {
     /// Data Base Address
-    pub dba: u64,
+    pub dba: PhysAddr,
     _res0: u32,
     /// 31: interrupt enable, 22:0 byte count (Zero base)
     pub flags: u32,

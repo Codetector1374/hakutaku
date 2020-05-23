@@ -10,7 +10,7 @@ use volatile::{ReadOnly, Volatile, WriteOnly};
 use kernel_api::syscall::sleep;
 use core::time::Duration;
 use alloc::boxed::Box;
-use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable};
+use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType};
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -223,10 +223,10 @@ impl AHCIController {
                 let vaddr = va + offset;
                 trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
                 unsafe {
-                    PAGE_TABLE.lock().map_to(
+                    PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("va_align"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("pa_align"),
-                        PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::PRESENT,
+                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
                         &mut fallocw,
                     ).expect("mapped").flush();
                 }
@@ -269,14 +269,14 @@ impl AHCIController {
         let ptr_cmd_list = self.command_lists[port as usize].as_ref().expect("some").as_ref() as *const CommandList;
         // Translate VA => PA
         let cmd_list_pa = without_interrupts(|| {
-            PAGE_TABLE.lock().translate_addr(VirtAddr::new(ptr_cmd_list as u64)).expect("has physical mapping")
+            PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_cmd_list as u64)).expect("has physical mapping")
         });
         regs.ports[port as usize].CommandListBase.write(cmd_list_pa);
 
         self.fis_list[port as usize].replace(Box::new(ReceivedFIS::default()));
         let ptr_fis = self.fis_list[port as usize].as_ref().expect("").as_ref() as *const ReceivedFIS;
         let fis_pa = without_interrupts(|| {
-            PAGE_TABLE.lock().translate_addr(VirtAddr::new(ptr_fis as u64)).expect("mapped")
+            PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_fis as u64)).expect("mapped")
         });
         regs.ports[port as usize].FISBase.write(fis_pa);
 
@@ -287,7 +287,7 @@ impl AHCIController {
             self.cmd_tables[port as usize].cmd_tables[idx].replace(Box::new(CommandTable::default()));
             let cmd_va_ptr = self.cmd_tables[port as usize].cmd_tables[idx].as_ref().expect("thing").as_ref() as *const CommandTable;
             let cmd_tbl_pa = without_interrupts(|| {
-                PAGE_TABLE.lock().translate_addr(VirtAddr::new(cmd_va_ptr as u64)).expect("mapped")
+                PAGE_TABLE.read().translate_addr(VirtAddr::new(cmd_va_ptr as u64)).expect("mapped")
             });
             cmd_header.ctba = cmd_tbl_pa;
         }
@@ -298,13 +298,13 @@ impl AHCIController {
     fn test(&mut self, port: u8) {
         let mut buf = [0u16; 256];
         self.read_sector(port, 0, &mut buf);
-        let buf2: &[u8; 512] = unsafe { core::mem::transmute(&buf) };
+        println!("Last Two Bytes {:x}", buf[255]);
     }
 
-    fn read_sector(&mut self, port: u8, addr: u64, buf: &mut [u16]) {
-        let ahci_port = &mut self.regs.as_mut().expect("").ports[port as usize];
-        ahci_port.IS.write(!0); // Clear All Interrupts
-        let slot = ahci_port.find_free_command_slot().expect("free slot");
+    fn read_sector(&mut self, port: u8, sector: u64, buf: &mut [u16]) {
+        let hba_port = &mut self.regs.as_mut().expect("").ports[port as usize];
+        hba_port.IS.write(!0); // Clear All Interrupts
+        let slot = hba_port.find_free_command_slot().expect("free slot");
         debug!("[AHCI] read_sector: free slot: {}", slot);
         let cmd_header = &mut self.command_lists[port as usize].as_mut().expect("").commands[slot as usize];
         // D2H FIS is 4 DWORDs
@@ -314,7 +314,35 @@ impl AHCIController {
         let cmd_tbl = self.cmd_tables[port as usize].cmd_tables[slot as usize].as_mut().expect("lol").as_mut();
         *cmd_tbl = CommandTable::default(); // zero table
         cmd_tbl.prtd_entry[0].flags = 0x1 << 31 | 511; // TODO Fixed sector size
-        cmd_tbl.prtd_entry[0].dba = buf.as_mut_ptr() as u64;
+        let bufpa = without_interrupts(|| {
+            PAGE_TABLE.read().translate_addr(VirtAddr::new(buf.as_mut_ptr() as u64)).expect("mapped")
+        });
+        cmd_tbl.prtd_entry[0].dba = bufpa;
+
+        cmd_tbl.cfis.fis_type = FISType::RegH2d;
+        cmd_tbl.cfis.flags = 0x1 << 7;
+        cmd_tbl.cfis.command = 0xC8; // Read DMA (Non Ext: 256 sectors max)
+        cmd_tbl.cfis.set_lba(sector);
+        cmd_tbl.cfis.device = 1 << 6; // LBA Mode
+        cmd_tbl.cfis.count = 1;
+
+        while hba_port.TFD.read() & 0b10001000 != 0 {
+            sleep(Duration::from_micros(1)).expect("slept");
+            debug!("[AHCI] Waiting on ctlr to idle");
+        }
+
+        hba_port.CI.write(0x1u32 << slot as u32);
+        debug!("[AHCI] Issued Read Command");
+        loop {
+            if hba_port.CI.read() >> slot as u32 & 0x1 == 0 {
+                break;
+            }
+        }
+        if hba_port.IS.read() >> 30 & 0x1 == 1 {
+            error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
+            return;
+        }
+        debug!("[AHCI] Read Complete");
     }
 
     /// Start Command Engine on port

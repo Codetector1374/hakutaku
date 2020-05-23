@@ -67,7 +67,7 @@ impl APIC {
         let mut alloc_wrapper = FrameAllocWrapper {};
         unsafe {
             without_interrupts(|| {
-                PAGE_TABLE.lock().map_to(
+                PAGE_TABLE.write().map_to(
                     Page::<Size4KiB>::from_start_address(va).expect("valid page bound"),
                     PhysFrame::from_start_address(apic_base).expect("pa alignment"),
                     PageTableFlags::PRESENT | PageTableFlags::WRITABLE,

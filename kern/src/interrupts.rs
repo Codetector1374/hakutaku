@@ -94,7 +94,7 @@ extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFr
     let mut lmao = FrameAllocWrapper{};
 
     unsafe {
-        PAGE_TABLE.lock().map_to(
+        PAGE_TABLE.write().map_to(
             Page::containing_address(faulting_addr),
             phys_frame,
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE,

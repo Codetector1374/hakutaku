@@ -122,7 +122,7 @@ impl From<PCIDevice> for XHCI {
                 let vaddr = va + offset;
                 trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
                 unsafe {
-                    PAGE_TABLE.lock().map_to(
+                    PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
                         PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
@@ -405,7 +405,7 @@ impl XHCI {
         // Event Ring Table: Setup the first entry
         let dequeue_va = self.info.event_ring.as_deref().unwrap() as *const EventRingSegment as u64;
         let dequeue_pa = without_interrupts(|| {
-            PAGE_TABLE.lock().translate_addr(VirtAddr::new(dequeue_va)).expect("has mapping")
+            PAGE_TABLE.read().translate_addr(VirtAddr::new(dequeue_va)).expect("has mapping")
         }).as_u64();
         self.info.event_ring_table.as_mut().expect("table").segments[0].addr = dequeue_pa;
         self.info.event_ring_table.as_mut().expect("table").segments[0].segment_size = 256;
@@ -420,7 +420,7 @@ impl XHCI {
         // Event Ring Segment Table
         let erst_va = VirtAddr::new(self.info.event_ring_table.as_deref().expect("lol") as *const EventRingSegmentTable as u64);
         let erst_pa = without_interrupts(|| {
-            PAGE_TABLE.lock().translate_addr(erst_va).expect("mapped")
+            PAGE_TABLE.read().translate_addr(erst_va).expect("mapped")
         });
         int_regs.event_ring_seg_table_ptr.write(erst_pa.as_u64());
         int_regs.flags.write(0x1 << 1); // Enable Interrupt
@@ -431,7 +431,7 @@ impl XHCI {
             let dcbaa_ptr = self.info.device_context_baa.as_deref_mut().expect("has thing") as *const DeviceContextBaseAddressArray;
             let dcbaa_va = VirtAddr::new(dcbaa_ptr as u64);
             let dcbaa_pa = without_interrupts(|| {
-                PAGE_TABLE.lock().translate_addr(dcbaa_va).expect("Mapped")
+                PAGE_TABLE.read().translate_addr(dcbaa_va).expect("Mapped")
             });
             // DeviceContextBaseAddrArray
             trace!("[XHCI] dcbaaPA: {:?}", dcbaa_pa);
@@ -451,7 +451,7 @@ impl XHCI {
             let crcr_ptr = self.info.usb_cr.as_deref().expect("thing") as *const CommandRingSegment;
             let crcr_va = VirtAddr::new(crcr_ptr as u64);
             let crcr_pa = without_interrupts(|| {
-                PAGE_TABLE.lock().translate_addr(crcr_va).expect("Unmapped")
+                PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
             });
             debug!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
             if self.operational_regs.command_ring_control.read() & 0b1000 == 0 {

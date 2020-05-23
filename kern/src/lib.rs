@@ -14,7 +14,7 @@ use core::borrow::BorrowMut;
 use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, MapperAllSizes, Mapper, Page, PageTableFlags, FrameAllocator, Size2MiB};
 use x86_64::VirtAddr;
 use lazy_static::lazy_static;
-use spin::{Mutex, MutexGuard};
+use spin::{Mutex, MutexGuard, RwLock};
 use crate::interrupts::{PICS, InterruptIndex};
 use crate::memory::paging::P4_PAGETBALE;
 use crate::memory::{align_up, align_down};
@@ -68,8 +68,8 @@ pub mod process;
 pub mod syscall;
 
 lazy_static! {
-    static ref PAGE_TABLE: Mutex<RecursivePageTable<'static>> = {
-        unsafe {Mutex::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))}
+    static ref PAGE_TABLE: RwLock<RecursivePageTable<'static>> = {
+        unsafe {RwLock::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))}
     };
 }
 
@@ -83,6 +83,7 @@ pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
 
 fn kern_init(boot_info: &BootInformation) {
+
     gdt::init();
     interrupts::init_idt();
     unsafe {
@@ -103,16 +104,19 @@ fn kern_init(boot_info: &BootInformation) {
     let max_kern_mem = align_up(max(multiboot_end, kernel_end as usize), 1024 * 1024 * 2); // 2M
     debug!("Kernel end 0x{:x}", max_kern_mem);
     // Unmap extra memory (Only kernel is kept)
-    for page_base in (max_kern_mem..1024 * 1024 * 1024).step_by(1024 * 1024 * 2) { // 1GB, 2MB
-        let mut res = PAGE_TABLE.lock().unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
-        match &mut res {
-            Err(e) => {
-                warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
+    {
+        let mut pt = PAGE_TABLE.write();
+        for page_base in (max_kern_mem..1024 * 1024 * 1024).step_by(1024 * 1024 * 2) { // 1GB, 2MB
+            let mut res = pt.unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
+            match &mut res {
+                Err(e) => {
+                    warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
+                }
+                _ => {}
             }
-            _ => {}
         }
+        x86_64::instructions::tlb::flush_all();
     }
-    x86_64::instructions::tlb::flush_all();
 
     for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;

@@ -4,19 +4,41 @@ use x86_64::PhysAddr;
 
 #[repr(u8)]
 pub enum FISType {
-    FisTypeRegH2d = 0x27,	// Register FIS - host to device
-    FisTypeRegD2h = 0x34,	// Register FIS - device to host
-    FisTypeDmaAct = 0x39,	// DMA activate FIS - device to host
-    FisTypeDmaSetup = 0x41,	// DMA setup FIS - bidirectional
-    FisTypeData = 0x46,	// Data FIS - bidirectional
-    FisTypeBist = 0x58,	// BIST activate FIS - bidirectional
-    FisTypePioSetup = 0x5F,	// PIO setup FIS - device to host
-    FisTypeDevBits = 0xA1,	// Set device bits FIS - device to host
+    Invalid = 0x0,
+    RegH2d = 0x27,	// Register FIS - host to device
+    RegD2h = 0x34,	// Register FIS - device to host
+    DmaAct = 0x39,	// DMA activate FIS - device to host
+    DmaSetup = 0x41,	// DMA setup FIS - bidirectional
+    Data = 0x46,	// Data FIS - bidirectional
+    Bist = 0x58,	// BIST activate FIS - bidirectional
+    PioSetup = 0x5F,	// PIO setup FIS - device to host
+    DevBits = 0xA1,	// Set device bits FIS - device to host
 }
 
 #[repr(C)]
 pub struct FISRegH2D {
     fis_type: FISType,
+    flags: u8,
+    command: u8,
+    feature_l: u8,
+    // DW1
+    lba0: u8,
+    lba1: u8,
+    lba2: u8,
+    device: u8,
+
+    //DW2
+    lba3: u8,
+    lba4: u8,
+    lba5: u8,
+    feature_h: u8,
+
+    //DW3
+    count: u16,
+    icc: u8,
+    ctrl: u8,
+    // DW4
+    _res0: u32
 }
 
 #[repr(C, align(256))]
@@ -82,7 +104,8 @@ pub struct CommandTableList {
 #[repr(C, align(128))]
 pub struct CommandTable {
     /// Command FIS
-    pub cfis: [u8; 64],
+    pub cfis: FISRegH2D,
+    _res: [u8; 64-core::mem::size_of::<FISRegH2D>()],
     /// ATA/ATAPI Command
     pub acmd: [u8; 16],
     pub _res0: [u8; 48],

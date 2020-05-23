@@ -4,6 +4,7 @@ use crate::pci::GLOBAL_PCI;
 use crate::device::ahci::controller::AHCIController;
 
 pub mod controller;
+pub mod structures;
 
 pub static G_AHCI: AHCI = AHCI::new();
 

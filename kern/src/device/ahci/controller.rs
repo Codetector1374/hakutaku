@@ -8,7 +8,8 @@ use crate::pci::class::PCIClassMassStroageSATA::AHCI;
 use x86_64::structures::paging::{Mapper, Size4KiB, Page, PhysFrame, PageTableFlags};
 use volatile::{ReadOnly, Volatile, WriteOnly};
 use kernel_api::syscall::sleep;
-use bitflags::_core::time::Duration;
+use core::time::Duration;
+use alloc::boxed::Box;
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -167,7 +168,7 @@ impl AHCIController {
                 if regs.generic_control.BOHC.read() & 0x2 != 0 {
                     break;
                 }
-                sleep(Duration::from_micros(1));
+                sleep(Duration::from_micros(1)).expect("sleep");
             }
         }
         debug!("[AHCI] Device is OS owned");

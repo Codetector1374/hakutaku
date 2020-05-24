@@ -27,7 +27,7 @@ pub struct AHCIController {
 
 #[repr(C)]
 struct AHCIRegisters {
-    generic_control: AHCIGenericHostControl,
+    generic_control: AHCIGenericHostControl, // 11 DWs 44 Bytes
     _res0: [u8; 116],
     _vendor: [u8; 96],
     ports: [AHCIHBAPort; 32],
@@ -183,6 +183,10 @@ impl AHCIController {
 
     fn transfer_control(&mut self) {
         let regs = self.regs.as_mut().expect("");
+        if regs.generic_control.CAP2.read() & 0x1 == 0{
+            warn!("[AHCI] BIOS Hand Off is Not Supported");
+           return;
+        }
         let current_status = regs.generic_control.BOHC.read();
         if current_status & 0x1 == 1 {
             debug!("[AHCI] Transfering Control from BIOS");
@@ -194,7 +198,7 @@ impl AHCIController {
                 sleep(Duration::from_micros(1)).expect("sleep");
             }
         }
-        debug!("[AHCI] Device is OS owned");
+        debug!("[AHCI] Device is OS owned: 0x{:x}", regs.generic_control.BOHC.read());
     }
 
     fn internal_initialize(&mut self) {
@@ -395,30 +399,29 @@ impl AHCIController {
 
     /// Start Command Engine on port
     fn start_port_cmd(&mut self, port: u8) {
+        use super::consts::*;
         let regs = self.regs.as_mut().expect("");
         // Waiting for CR to clear
         while regs.ports[port as usize].CMD.read() >> 15 & 0x1 == 1 {
             sleep(Duration::from_micros(1)).expect("slept");
         }
+        regs.ports[port as usize].CMD.write(
+            PxCMD_ST | PxCMD_SpinUp | PxCMD_PowerOn |
+                PxCMD_FIS_RxEn | PxCMD_ICC_ACTIVE
+        );
         let value = regs.ports[port as usize].CMD.read();
-        // Set bit 4 (FIS Recv EN) & bit 0 (Start)
-        regs.ports[port as usize].CMD.write(value | 0x1 << 4 | 0b110);
-        sleep(Duration::from_millis(50)).expect("slept");
-        debug!("[AHCI] Port {} CMD  : {:032b}", port, regs.ports[port as usize].CMD.read());
-        // Have to be two operation per documentation
+        debug!("[AHCI] CMD Port Value: {:032b}", value);
         // Before we write ST, let's do a CLO if the thing is busy
-        if regs.ports[port as usize].TFD.read() >> 7 & 0x1 == 1{
+        if regs.ports[port as usize].TFD.read() >> 7 & 0x1 == 1 {
             debug!("[AHCI] Port {} busy before start", port);
             let value = regs.ports[port as usize].CMD.read();
             regs.ports[port as usize].CMD.write(value | 01 << 3);
             while regs.ports[port as usize].CMD.read() >> 3 & 0x1 == 1 {}
         }
-        let value = regs.ports[port as usize].CMD.read();
-        regs.ports[port as usize].CMD.write(value | 0x1 << 0);
         debug!("[AHCI] Port {} starting...", port);
-        while regs.ports[port as usize].CMD.read() >> 14 & 0b11 != 0b11 {
-            sleep(Duration::from_millis(1)).expect("slept");
-        }
+        // while regs.ports[port as usize].CMD.read() & (PxCMD_CMD_Running | PxCMD_FIS_Running) != PxCMD_CMD_Running | PxCMD_FIS_Running {
+        //     sleep(Duration::from_millis(1)).expect("slept");
+        // }
         debug!("[AHCI] Port {} start: {:032b}", port, regs.ports[port as usize].CMD.read());
     }
 

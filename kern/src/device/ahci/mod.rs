@@ -5,6 +5,7 @@ use crate::device::ahci::controller::AHCIController;
 
 pub mod controller;
 pub mod structures;
+pub mod consts;
 
 pub static G_AHCI: AHCI = AHCI::new();
 
@@ -22,7 +23,7 @@ impl AHCI {
     pub fn initialize(&self) {
         for dev in GLOBAL_PCI.lock().enumerate_pci_bus() {
             use crate::pci::class::*;
-            if let PCIDeviceClass::MassStorageController(PCIClassMassStorage::SATA(PCIClassMassStroageSATA::AHCI)) = dev.info.class {
+            if let PCIDeviceClass::MassStorageController(PCIClassMassStorage::SATA(_)) = dev.info.class {
                 match AHCIController::create_from_device(dev) {
                     Some(ctrler) => {
                         self.controllers.lock().push(ctrler);

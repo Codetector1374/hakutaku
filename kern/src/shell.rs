@@ -196,7 +196,12 @@ impl Shell {
                     GLOBAL_PCI.lock().enumerate_pci_bus()
                 });
                 for dev in &devs {
-                    println!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                    match dev.info.class {
+                        PCIDeviceClass::MassStorageController(_) => {
+                            println!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(0)
             }

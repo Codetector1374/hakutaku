@@ -146,6 +146,10 @@ impl PCIController {
         match dev {
             Some(d) => {
                 let mf = d.info.header_type.is_multi_function();
+                if let HeaderType::PCIBridge(_) = d.info.header_type {
+                    let num = d.secondary_bus_number();
+                    self.enumerate_bus(num, vec);
+                }
                 vec.push(d);
                 mf
             }

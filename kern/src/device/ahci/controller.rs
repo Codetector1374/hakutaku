@@ -12,6 +12,7 @@ use core::time::Duration;
 use alloc::boxed::Box;
 use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType};
 use crate::hardware::pit::PIT;
+use super::consts::*;
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -88,7 +89,7 @@ impl AHCIHBAPort {
 #[repr(C)]
 #[allow(non_snake_case)]
 struct AHCIGenericHostControl {
-    CAP: ReadOnly<u32>,
+    CAP: Volatile<u32>,
     // Host(HBA) Capabilities
     GHC: Volatile<u32>,
     // Global HBA Control
@@ -240,9 +241,32 @@ impl AHCIController {
         });
         let regs_va = va_root + base_offset;
         self.regs = Some(unsafe { &mut *(regs_va.as_mut_ptr()) });
+        let regs = self.regs.as_mut().expect("thing");
 
-        self.transfer_control();
-        // self.reset_controller();
+        // Removed since nobody does this.
+        // self.transfer_control();
+
+        // Step 1: Save the existing HostCap register before reset.
+        let mut cap_save = regs.generic_control.CAP.read();
+        cap_save &= CAP_SPM | CAP_SMPS;
+        cap_save |= CAP_SSS;
+
+        // Step 2: Reset Controller
+        self.controller_reset().expect("reset failure");
+        let regs = self.regs.as_mut().expect("");
+        // Enable AHCI Mode
+        regs.generic_control.GHC.write(GHC_AHCIEnable);
+        // Restore HostCap
+        regs.generic_control.CAP.write(cap_save);
+        // profit?? http://10.45.1.22/uboot/latest/source/drivers/ata/ahci.c#L194
+        regs.generic_control.PI.write(0xf);
+
+        // Intel needful-ness?
+        if self.dev.info.vendor_id == crate::pci::ids::VID_INTEL {
+            debug!("[AHCI] Intel Controller Detected");
+            let tmp = self.dev.read_config_word(0x92);
+            self.dev.write_config_word(0x92, tmp | 0xF);
+        }
 
 
         let regs = self.regs.as_mut().expect("some");
@@ -274,12 +298,25 @@ impl AHCIController {
         }
     }
 
-    fn reset_controller(&mut self) {
+    fn controller_reset(&mut self) -> Result<(), ()> {
         let regs = self.regs.as_mut().expect("");
-        let ghc = regs.generic_control.GHC.read();
-        regs.generic_control.GHC.write(ghc | 0x1); // HBA Reset
-        while regs.generic_control.GHC.read() & 0x1 == 1 {}
+        let tmp = regs.generic_control.GHC.read();
+        // Check if a reset is already in progress
+        if tmp & GHC_HostReset == 0 {
+            regs.generic_control.GHC.write(tmp | 0x1); // HBA Reset
+        }
+
+        // HBA *SHOULD* reset within 1 second
+        let timeout_target = PIT::current_time() + AHCIHBAResetTimeout;
+        while regs.generic_control.GHC.read() & 0x1 == 1 {
+            if PIT::current_time() > timeout_target {
+                error!("[AHCI] HBA Reset timeout");
+                return Err(());
+            }
+            sleep(Duration::from_millis(1));
+        }
         debug!("[AHCI] Controller Reset Complete");
+        Ok(())
     }
 
     fn reset_port(&mut self, port: u8) {
@@ -460,7 +497,7 @@ impl AHCIController {
                     debug!("[AHCI] Device on Port {}: detect: {}, spd: {}", i, dev_detect, dev_spd);
                     let device_sig = regs.ports[i].SIG.read();
                     self.ports[i].device = device_sig.into();
-                    debug!("[AHCI] Device on Port {}: {:?}", i, self.ports[i].device);
+                    debug!("[AHCI] Device on Port {}: {:x?}", i, self.ports[i].device);
                 } else {
                     self.ports[i].device = AHCIHBAPortDevice::NoDevice;
                 }

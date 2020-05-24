@@ -6,6 +6,7 @@ use spin::Mutex;
 
 pub mod device;
 pub mod class;
+pub mod ids;
 
 pub static GLOBAL_PCI: Mutex<PCIController> = Mutex::new(PCIController {
     devices: None

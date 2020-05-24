@@ -103,7 +103,7 @@ impl PCIDevice {
         let ext_cap = (status >> 4) & 0x1 == 1;
         trace!("[PCI] has Capability List: {}", ext_cap);
         if ext_cap {
-            let cap_offset = self.read_config_dword(13) as u8;
+            let cap_offset = self.read_config_dword_dep(13) as u8;
             trace!("[PCI] Cap Offset {} ({})", cap_offset, cap_offset / 4);
             let mut next_offset = cap_offset;
             loop {
@@ -111,7 +111,7 @@ impl PCIDevice {
                     break;
                 }
                 assert_eq!(next_offset % 4, 0, "register alignment");
-                let word = self.read_config_dword(next_offset / 4);
+                let word = self.read_config_dword_dep(next_offset / 4);
                 let capid = word as u8;
                 let cap = PCICapability::new(capid, next_offset);
                 trace!("[PCI] Detected Capability {:?}", &cap.id);
@@ -122,16 +122,44 @@ impl PCIDevice {
     }
 
     pub fn read_status(&self) -> u16 {
-        (self.read_config_dword(1) >> 16) as u16
+        (self.read_config_dword_dep(1) >> 16) as u16
+    }
+
+    pub fn read_config_dword(&self, offset: u8) -> u32 {
+        PORTS.lock().read_config_dword(self.bus, self.device_number, self.func, offset / 4)
+    }
+
+    pub fn read_config_word(&self, offset: u8) -> u16 {
+        let val = self.read_config_dword(offset);
+        if offset % 4 >= 2 {
+            (val >> 16) as u16
+        } else {
+            val as u16
+        }
+    }
+
+    pub fn write_config_dword(&mut self, offset: u8, value: u32) {
+        PORTS.lock().write_config_dword(self.bus, self.device_number, self.func, offset / 4, value);
+    }
+
+    pub fn write_config_word(&mut self, offset: u8, val: u16) {
+        let old = self.read_config_dword(offset);
+        let new = if offset % 4 >= 2 {
+            (old & 0x00FF) | ((val as u32) << 16)
+        } else {
+            (old & 0xFF00) | val as u32
+        };
+        self.write_config_dword(offset, new);
     }
 
     /// Register number must be in range 0-63
-    pub fn read_config_dword(&self, register_number: u8) -> u32 {
-        PORTS.lock().read_config_dword(self.bus, self.device_number, self.func, register_number)
+    #[deprecated]
+    pub fn read_config_dword_dep(&self, register_number: u8) -> u32 {
+        self.read_config_dword(register_number * 4)
     }
 
-    pub fn write_config_word(&mut self, register_number: u8, value: u32) {
-        PORTS.lock().write_config_dword(self.bus, self.device_number, self.func, register_number, value);
+    pub fn write_config_dword_dep(&mut self, register_number: u8, value: u32) {
+        self.write_config_dword(register_number * 4, value);
     }
 
     pub fn base_mmio_address(&self, bar: u8) -> Option<PhysAddr> {
@@ -167,18 +195,18 @@ impl PCIDevice {
     }
 
     pub fn read_config_bar_register(&self, no: u8) -> u32 {
-        self.read_config_dword(CONFIG_BAR_BASE_REG + no as u8)
+        self.read_config_dword_dep(CONFIG_BAR_BASE_REG + no as u8)
     }
 
     pub fn irq_line(&self) -> u8 {
-        self.read_config_dword(0xF) as u8
+        self.read_config_dword_dep(0xF) as u8
     }
 
     pub fn address_space_size(&mut self) -> usize {
         let old_value = self.read_config_bar_register(0);
-        self.write_config_word(CONFIG_BAR_BASE_REG, 0xFFFF_FFFF);
+        self.write_config_dword_dep(CONFIG_BAR_BASE_REG, 0xFFFF_FFFF);
         let new_val = self.read_config_bar_register(0);
-        self.write_config_word(CONFIG_BAR_BASE_REG, old_value);
+        self.write_config_dword_dep(CONFIG_BAR_BASE_REG, old_value);
         (!new_val) as usize
     }
 
@@ -186,7 +214,7 @@ impl PCIDevice {
     /// Note: executing this on an invalid device is UB
 
     pub fn device_info(&self) -> (u8, u8, u8, u8) {
-        let config_word = self.read_config_dword(2);
+        let config_word = self.read_config_dword_dep(2);
         let cc = (config_word >> 24) as u8;
         let subclass = (config_word >> 16) as u8;
         let progif = (config_word >> 8) as u8;
@@ -195,13 +223,13 @@ impl PCIDevice {
     }
 
     pub fn header_type(&self) -> HeaderType {
-        let config_word = self.read_config_dword(3);
+        let config_word = self.read_config_dword_dep(3);
         HeaderType::from((config_word >> 16) as u8)
     }
 
     /// The caller should check if device is a PCI Bridge
     pub(super) fn secondary_bus_number(&self) -> u8 {
-        let read = self.read_config_dword(6);
+        let read = self.read_config_dword_dep(6);
         (read >> 8) as u8
     }
 }

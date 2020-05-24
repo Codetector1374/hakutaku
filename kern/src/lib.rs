@@ -6,6 +6,7 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 #![allow(unused_imports, dead_code)]
+#![allow(deprecated)]
 #![feature(const_in_array_repeat_expressions)]
 
 use core::fmt::Write;

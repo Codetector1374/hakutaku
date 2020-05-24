@@ -10,11 +10,17 @@ use volatile::{ReadOnly, Volatile, WriteOnly};
 use kernel_api::syscall::sleep;
 use core::time::Duration;
 use alloc::boxed::Box;
-use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType};
+use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType, FISRegH2D};
 use crate::hardware::pit::PIT;
 use super::consts::*;
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
+
+macro_rules! write_flush {
+    ($var: expr, $val: expr) => {{
+    $var.write($val); $var.read();
+    }};
+}
 
 pub struct AHCIController {
     dev: PCIDevice,
@@ -24,11 +30,16 @@ pub struct AHCIController {
     command_lists: [Option<Box<CommandList>>; 32],
     fis_list: [Option<Box<ReceivedFIS>>; 32],
     cmd_tables: [CommandTableList; 32],
+    capability: u32,
+    port_map: u32,
+    n_port: u32,
+    link_map: u32,
 }
 
 #[repr(C)]
 struct AHCIRegisters {
-    generic_control: AHCIGenericHostControl, // 11 DWs 44 Bytes
+    generic_control: AHCIGenericHostControl,
+    // 11 DWs 44 Bytes
     _res0: [u8; 116],
     _vendor: [u8; 96],
     ports: [AHCIHBAPort; 32],
@@ -40,9 +51,11 @@ const_assert_size!(AHCIRegisters, 0x1100);
 #[allow(non_snake_case)]
 struct AHCIHBAPort {
     /// Command List Base Address (Host -> Device)
-    CommandListBase: Volatile<PhysAddr>,
+    CommandListBase_L: Volatile<u32>,
+    CommandListBase_H: Volatile<u32>,
     /// FIS Base Address (Device -> Host)
-    FISBase: Volatile<PhysAddr>,
+    FISBase_L: Volatile<u32>,
+    FISBase_H: Volatile<u32>,
     /// Interrupt Status
     IS: Volatile<u32>,
     /// Interrupt Enable
@@ -83,6 +96,16 @@ impl AHCIHBAPort {
             }
         }
         None
+    }
+
+    pub fn set_command_list_base(&mut self, addr: PhysAddr) {
+        write_flush!(self.CommandListBase_L, addr.as_u64() as u32);
+        write_flush!(self.CommandListBase_H, (addr.as_u64() >> 32) as u32);
+    }
+
+    pub fn set_fis_base(&mut self, addr: PhysAddr) {
+        write_flush!(self.FISBase_L, addr.as_u64() as u32);
+        write_flush!(self.FISBase_H, (addr.as_u64() >> 32) as u32);
     }
 }
 
@@ -174,6 +197,10 @@ impl AHCIController {
                 command_lists: [None; 32],
                 fis_list: [None; 32],
                 cmd_tables: Default::default(),
+                capability: Default::default(),
+                port_map: Default::default(),
+                n_port: 0,
+                link_map: 0,
             };
             controller.internal_initialize();
             return Some(controller);
@@ -184,9 +211,9 @@ impl AHCIController {
 
     fn transfer_control(&mut self) {
         let regs = self.regs.as_mut().expect("");
-        if regs.generic_control.CAP2.read() & 0x1 == 0{
+        if regs.generic_control.CAP2.read() & 0x1 == 0 {
             warn!("[AHCI] BIOS Hand Off is Not Supported");
-           return;
+            return;
         }
         let current_status = regs.generic_control.BOHC.read();
         if current_status & 0x1 == 1 {
@@ -262,40 +289,63 @@ impl AHCIController {
         regs.generic_control.PI.write(0xf);
 
         // Intel needful-ness?
-        if self.dev.info.vendor_id == crate::pci::ids::VID_INTEL {
-            debug!("[AHCI] Intel Controller Detected");
+        if self.dev.info.vendor_id == crate::pci::consts::VID_INTEL {
+            debug!("[AHCI] Intel Controller Detected: PID: {:#x}", self.dev.info.device_id);
             let tmp = self.dev.read_config_word(0x92);
             self.dev.write_config_word(0x92, tmp | 0xF);
         }
 
-
-        let regs = self.regs.as_mut().expect("some");
-        if regs.generic_control.GHC.read() >> 31 & 0x1 != 1 {
-            debug!("[AHCI] Legacy Mode detected");
-            regs.generic_control.GHC.write(1 << 31);
-        }
-
-        let ports = self.port_count();
+        // Update information
+        self.capability = regs.generic_control.CAP.read();
+        self.port_map = regs.generic_control.PI.read();
+        self.n_port = self.port_count() as u32; // Lowest 6 bits
         let ver = self.version();
         debug!("[AHCI] Version: {:x}.{:x}", ver.0, ver.1);
-        debug!("[AHCI] Controller has {} ports", ports);
-        debug!("[AHCI] Ports Map: {:032b}", self.port_implemented_map());
-        debug!("[AHCI] Controller support {} command slots", self.command_slot_count());
-        self.port_scan();
-        let sata_port = self.ports.iter().find(|p| {
-            if p.enabled {
-                if let AHCIHBAPortDevice::SATA = p.device {
-                    return true;
-                }
+        debug!("[AHCI] Controller has {} ports", self.n_port);
+        debug!("[AHCI] Portmap: {:032b}", self.port_map);
+        debug!("[AHCI] cap: 0x{:x}", self.capability);
+
+        // Initialize all ports
+        for port_number in 0..32u8 {
+            if self.port_map >> port_number & 0x1 == 0 {
+                continue;
             }
-            false
-        });
-        if sata_port.is_some() {
-            let sata_port_num = sata_port.unwrap().number;
-            debug!("[AHCI] found SATA device on port {}", sata_port_num);
-            self.setup_port(sata_port_num);
-            self.test(sata_port_num);
+            self.initialize_port(port_number);
         }
+
+        // Enable IRQ?
+        let regs = self.regs.as_mut().expect("");
+        let tmp = regs.generic_control.GHC.read();
+        debug!("[AHCI] HostCTL: {:#x}", tmp);
+        regs.generic_control.GHC.write(tmp | GHC_InterruptEnable);
+        let tmp = regs.generic_control.GHC.read();
+        debug!("[AHCI] HostCTL: {:#x}", tmp);
+
+        let word = self.dev.read_config_word(crate::pci::consts::CONF_COMMAND_OFFSET);
+        self.dev.write_config_word(crate::pci::consts::CONF_COMMAND_OFFSET,
+                                   word | crate::pci::consts::PCI_COMMAND_MASTER);
+
+        self.start_ports();
+        self.port_scan();
+
+        // let ports = self.port_count();
+        // debug!("[AHCI] Ports Map: {:032b}", self.port_implemented_map());
+        // debug!("[AHCI] Controller support {} command slots", self.command_slot_count());
+        // self.port_scan();
+        // let sata_port = self.ports.iter().find(|p| {
+        //     if p.enabled {
+        //         if let AHCIHBAPortDevice::SATA = p.device {
+        //             return true;
+        //         }
+        //     }
+        //     false
+        // });
+        // if sata_port.is_some() {
+        //     let sata_port_num = sata_port.unwrap().number;
+        //     debug!("[AHCI] found SATA device on port {}", sata_port_num);
+        //     self.setup_port(sata_port_num);
+        self.test(0);
+        // }
     }
 
     fn controller_reset(&mut self) -> Result<(), ()> {
@@ -313,44 +363,139 @@ impl AHCIController {
                 error!("[AHCI] HBA Reset timeout");
                 return Err(());
             }
-            sleep(Duration::from_millis(1));
+            sleep(Duration::from_millis(1)).expect("slept");
         }
         debug!("[AHCI] Controller Reset Complete");
         Ok(())
     }
 
-    fn reset_port(&mut self, port: u8) {
-        let regs = self.regs.as_mut().expect("");
-        regs.ports[port as usize].SCTL.write(0x701);
-        sleep(Duration::from_millis(2)).expect("slept");
-        regs.ports[port as usize].SCTL.write(0x700);
-        while regs.ports[port as usize].SSTS.read() & 0xF != 0x3 {
-            sleep(Duration::from_millis(1)).expect("slept");
+    fn initialize_port(&mut self, port: u8) {
+        // Step1: Stop if it is active
+        let regs = self.regs.as_mut().expect(concat!(file!(), line!()));
+        let port_reg = &mut regs.ports[port as usize];
+
+        let flags = PxCMD_ST | PxCMD_CMD_Running | PxCMD_FIS_RxEn | PxCMD_FIS_Running;
+        let tmp = port_reg.CMD.read();
+        if tmp & flags != 0 {
+            debug!("[AHCI] Port {} is active, stopping", port);
+            write_flush!(port_reg.CMD,tmp & !flags);
+            sleep(Duration::from_millis(500)).expect("slept");
         }
-        debug!("[AHCI] Device Reset");
+
+        /* Add the spinup command to whatever mode bits may
+		 * already be on in the command register.
+		 */
+        let tmp = port_reg.CMD.read();
+        write_flush!(port_reg.CMD, tmp | PxCMD_SpinUp);
+
+        Self::sata_link_up(port_reg).expect("SATA Link Not Up");
+
+        // Error Clear
+        port_reg.SERR.write(port_reg.SERR.read());
+
+        // Spinup Drive
+        let timeout_target = PIT::current_time() + AHCIDeviceSpinupTimeout;
+        let spinup_begin = PIT::current_time();
+        loop {
+            let tfd = port_reg.TFD.read();
+            if tfd & (PxTFD_BSY | PxTFD_DRQ) == 0 {
+                debug!("[AHCI] Not Busy");
+                break;
+            }
+            sleep(Duration::from_millis(1)).expect("slept");
+            let tmp = port_reg.SSTS.read() & PxSSTS_DETMask;
+            if tmp == PxSSTS_DET_Ready {
+                debug!("[AHCI] Busy but Ready");
+                break;
+            }
+            if PIT::current_time() > timeout_target {
+                error!("[AHCI] Device spinup timeout");
+            }
+        }
+
+        let tmp = port_reg.SSTS.read() & PxSSTS_DETMask;
+        if tmp == PxSSTS_DET_ComInit {
+            debug!("[AHCI] Device Present, no communication");
+        }
+
+        debug!("[AHCI] Spinup time: {:?}", PIT::current_time() - spinup_begin);
+
+        let tmp = port_reg.SERR.read();
+        if tmp != 0 {
+            debug!("[AHCI] Error: 0x{:x}", tmp);
+            port_reg.SERR.write(tmp);
+        }
+
+
+        // Clear Interrupt if any
+        let tmp = port_reg.IS.read();
+        debug!("[AHCI] Interrupt Status: {:#x}", tmp);
+        if tmp != 0 {
+            port_reg.IS.write(tmp);
+        }
+        regs.generic_control.IS.write(0x1 << port);
+
+        let tmp = port_reg.SSTS.read();
+        debug!("[AHCI] Port {} status: {:#x}", port, tmp);
+        if tmp & PxSSTS_DETMask == PxSSTS_DET_Ready {
+            self.link_map |= 0x1 << port;
+        }
     }
 
-    pub fn setup_port(&mut self, port: u8) {
-        self.stop_port_cmd(port);
-        self.reset_port(port);
+    fn sata_link_up(port: &mut AHCIHBAPort) -> Result<(), ()> {
+        let target = PIT::current_time() + AHCIPortLinkUpTimeout;
+        loop {
+            let val = port.SSTS.read() & PxSSTS_DETMask;
+            if val == PxSSTS_DET_Ready {
+                return Ok(());
+            }
+            if PIT::current_time() > target {
+                return Err(());
+            }
+            sleep(Duration::from_millis(1)).expect("");
+        }
+    }
+
+    fn start_ports(&mut self) {
+        debug!("[AHCI] Starting Ports: {:#x}", self.link_map);
+        for port_number in 0..32u8 {
+            if self.link_map >> port_number & 0x1 == 0 {
+                continue;
+            }
+            self.start_port(port_number);
+        }
+    }
+
+    fn start_port(&mut self, port: u8) {
         let regs = self.regs.as_mut().expect("");
-        debug!("[AHCI] Command Engine Stopped");
+        let port_reg = &mut regs.ports[port as usize];
+        debug!("[AHCI] Starting Port: {}", port);
+        let port_sts = port_reg.SSTS.read();
+        debug!("[AHCI] Port: {} status: {:#x}", port, port_sts);
+        if port_sts & PxSSTS_DETMask != PxSSTS_DET_Ready {
+            error!("[AHCI] Port {} has no link", port);
+            return;
+        }
+
+        // Setup Lists, FISes
         self.command_lists[port as usize].replace(Box::new(CommandList::default()));
         let ptr_cmd_list = self.command_lists[port as usize].as_ref().expect("some").as_ref() as *const CommandList;
         // Translate VA => PA
         let cmd_list_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_cmd_list as u64)).expect("has physical mapping")
         });
-        regs.ports[port as usize].CommandListBase.write(cmd_list_pa);
+        assert!(cmd_list_pa.is_aligned(1024u64), "CLB Alignment");
+        regs.ports[port as usize].set_command_list_base(cmd_list_pa);
 
         self.fis_list[port as usize].replace(Box::new(ReceivedFIS::default()));
         let ptr_fis = self.fis_list[port as usize].as_ref().expect("").as_ref() as *const ReceivedFIS;
         let fis_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_fis as u64)).expect("mapped")
         });
-        regs.ports[port as usize].FISBase.write(fis_pa);
+        assert!(fis_pa.is_aligned(256u64), "CLB Alignment");
+        regs.ports[port as usize].set_fis_base(fis_pa);
 
-
+        let port_reg = &mut regs.ports[port as usize];
         // Initialize each command in the CMDList
         for (idx, cmd_header) in self.command_lists[port as usize].as_mut().expect("thing").commands.iter_mut().enumerate() {
             cmd_header.prdtl = 8;
@@ -362,8 +507,22 @@ impl AHCIController {
             cmd_header.ctba = cmd_tbl_pa;
         }
 
-        self.start_port_cmd(port);
-        debug!("[AHCI] Command Table Initialized");
+        // Actually Start Port
+        write_flush!(port_reg.CMD, PxCMD_ICC_ACTIVE |
+        PxCMD_FIS_RxEn | PxCMD_PowerOn | PxCMD_SpinUp | PxCMD_ST
+        );
+
+        let timeout_target = PIT::current_time() + AHCIDeviceSpinupTimeout;
+        loop {
+            if port_reg.TFD.read() & PxTFD_BSY == 0 {
+                break;
+            }
+
+            if PIT::current_time() > timeout_target {
+                error!("Start Device on port {} Spinup Timeout", port);
+            }
+        }
+        debug!("[AHCI] Port {} started", port);
     }
 
     fn test(&mut self, port: u8) {
@@ -380,9 +539,10 @@ impl AHCIController {
         hba_port.IS.write(!0); // Clear All Interrupts
         let slot = hba_port.find_free_command_slot().expect("free slot");
         debug!("[AHCI] read_sector: free slot: {}", slot);
+        debug!("[AHCI] read_sector: CMD: {:#x}", hba_port.CMD.read());
         let cmd_header = &mut self.command_lists[port as usize].as_mut().expect("").commands[slot as usize];
-        // D2H FIS is 4 DWORDs
-        cmd_header.flags = 0x1 << 10 | 0x4; // 4 DWORDs
+        // H2D FIS is 5 DWORDs
+        cmd_header.flags = 0x1 << 10 | (core::mem::size_of::<FISRegH2D>() / 4) as u16; // 5 DWORDs
         cmd_header.prdtl = 1;
 
         let cmd_tbl = self.cmd_tables[port as usize].cmd_tables[slot as usize].as_mut().expect("lol").as_mut();
@@ -411,7 +571,7 @@ impl AHCIController {
             }
         }
 
-        hba_port.CI.write(0x1u32 << slot as u32);
+        write_flush!(hba_port.CI, 1u32 << slot);
         debug!("[AHCI] Issued Read Command");
         let timeout_target = PIT::current_time() + Duration::from_secs(5);
         loop {

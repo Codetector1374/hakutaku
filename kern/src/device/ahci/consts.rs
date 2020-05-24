@@ -30,4 +30,18 @@ pub const PxCMD_FIS_Running: u32 = 0x1 << 14;
 pub const PxCMD_CMD_Running: u32 = 0x1 << 15;
 pub const PxCMD_ICC_ACTIVE: u32 = 0x1 << 28;
 
+// AHCI Port SSTS
+pub const PxSSTS_DETMask: u32 = 0xf;
+pub const PxSSTS_DET_Ready: u32 = 3;
+/// Present & No Comm
+pub const PxSSTS_DET_ComInit: u32 = 1;
+
+// AHCI Port TFData
+pub const PxTFD_StatusMask: u32 = 0xFF;
+pub const PxTFD_BSY: u32 = 0x1 << 7;
+pub const PxTFD_DRQ: u32 = 0x1 << 3;
+
+
 pub const AHCIHBAResetTimeout: Duration = Duration::from_secs(1);
+pub const AHCIPortLinkUpTimeout: Duration = Duration::from_millis(200);
+pub const AHCIDeviceSpinupTimeout: Duration = Duration::from_secs(20);

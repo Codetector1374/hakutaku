@@ -18,29 +18,31 @@ pub enum FISType {
 
 #[repr(C)]
 pub struct FISRegH2D {
+    // DW1
     pub fis_type: FISType,
     pub flags: u8,
     pub command: u8,
     pub feature_l: u8,
-    // DW1
+    //DW2
     lba0: u8,
     lba1: u8,
     lba2: u8,
     pub device: u8,
 
-    //DW2
+    //DW3
     lba3: u8,
     lba4: u8,
     lba5: u8,
     pub feature_h: u8,
 
-    //DW3
+    // DW4
     pub count: u16,
     pub icc: u8,
     pub ctrl: u8,
-    // DW4
+    // DW5
     _res0: u32
 }
+const_assert_size!(FISRegH2D, 20);
 
 impl FISRegH2D {
     pub fn set_lba(&mut self, lba: u64) {
@@ -80,7 +82,7 @@ impl Default for ReceivedFIS {
     }
 }
 
-#[repr(C)]
+#[repr(C,align(1024))]
 #[derive(Default)]
 pub struct CommandList {
     pub commands: [CommandHeader; 32]

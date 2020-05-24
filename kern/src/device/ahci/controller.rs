@@ -238,6 +238,9 @@ impl AHCIController {
         self.regs = Some(unsafe { &mut *(regs_va.as_mut_ptr()) });
 
         self.transfer_control();
+        // self.reset_controller();
+
+
         let regs = self.regs.as_mut().expect("some");
         if regs.generic_control.GHC.read() >> 31 & 0x1 != 1 {
             debug!("[AHCI] Legacy Mode detected");
@@ -265,6 +268,14 @@ impl AHCIController {
             self.setup_port(sata_port_num);
             self.test(sata_port_num);
         }
+    }
+
+    fn reset_controller(&mut self) {
+        let regs = self.regs.as_mut().expect("");
+        let ghc = regs.generic_control.GHC.read();
+        regs.generic_control.GHC.write(ghc | 0x1); // HBA Reset
+        while regs.generic_control.GHC.read() & 0x1 == 1 {}
+        debug!("[AHCI] Controller Reset Complete");
     }
 
     fn reset_port(&mut self, port: u8) {
@@ -385,7 +396,8 @@ impl AHCIController {
     /// Start Command Engine on port
     fn start_port_cmd(&mut self, port: u8) {
         let regs = self.regs.as_mut().expect("");
-        while regs.ports[port as usize].CMD.read() >> 15 & 0x1 != 0 {
+        // Waiting for CR to clear
+        while regs.ports[port as usize].CMD.read() >> 15 & 0x1 == 1 {
             sleep(Duration::from_micros(1)).expect("slept");
         }
         let value = regs.ports[port as usize].CMD.read();
@@ -403,7 +415,10 @@ impl AHCIController {
         }
         let value = regs.ports[port as usize].CMD.read();
         regs.ports[port as usize].CMD.write(value | 0x1 << 0);
-        sleep(Duration::from_millis(50)).expect("slept");
+        debug!("[AHCI] Port {} starting...", port);
+        while regs.ports[port as usize].CMD.read() >> 14 & 0b11 != 0b11 {
+            sleep(Duration::from_millis(1)).expect("slept");
+        }
         debug!("[AHCI] Port {} start: {:032b}", port, regs.ports[port as usize].CMD.read());
     }
 

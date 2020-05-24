@@ -36,6 +36,7 @@ use kernel_api::syscall::sleep;
 use crate::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
 use x86_64::registers::control::Cr0Flags;
+use alloc::string::String;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -181,6 +182,9 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     hardware::keyboard::initialize();
     GLOBAL_PCI.lock().scan_pci_bus();
     println!("Kern started");
+    let mfg_string = x86_64::instructions::cpuid::mfgid();
+    let str = String::from_utf8_lossy(&mfg_string).into_owned();
+    println!("I'm running on {}", &str);
     // Load the first process
     let mut main_proc = Process::new();
     main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();

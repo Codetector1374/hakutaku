@@ -209,26 +209,6 @@ impl AHCIController {
         None
     }
 
-    fn transfer_control(&mut self) {
-        let regs = self.regs.as_mut().expect("");
-        if regs.generic_control.CAP2.read() & 0x1 == 0 {
-            warn!("[AHCI] BIOS Hand Off is Not Supported");
-            return;
-        }
-        let current_status = regs.generic_control.BOHC.read();
-        if current_status & 0x1 == 1 {
-            debug!("[AHCI] Transfering Control from BIOS");
-            regs.generic_control.BOHC.write(0b10);
-            loop {
-                if regs.generic_control.BOHC.read() & 0x2 != 0 {
-                    break;
-                }
-                sleep(Duration::from_micros(1)).expect("sleep");
-            }
-        }
-        debug!("[AHCI] Device is OS owned: 0x{:x}", regs.generic_control.BOHC.read());
-    }
-
     fn internal_initialize(&mut self) {
         use crate::memory::frame_allocator::FrameAllocWrapper;
         // bar 5
@@ -270,9 +250,6 @@ impl AHCIController {
         self.regs = Some(unsafe { &mut *(regs_va.as_mut_ptr()) });
         let regs = self.regs.as_mut().expect("thing");
 
-        // Removed since nobody does this.
-        // self.transfer_control();
-
         // Step 1: Save the existing HostCap register before reset.
         let mut cap_save = regs.generic_control.CAP.read();
         cap_save &= CAP_SPM | CAP_SMPS;
@@ -280,6 +257,8 @@ impl AHCIController {
 
         // Step 2: Reset Controller
         self.controller_reset().expect("reset failure");
+
+
         let regs = self.regs.as_mut().expect("");
         // Enable AHCI Mode
         regs.generic_control.GHC.write(GHC_AHCIEnable);
@@ -287,13 +266,6 @@ impl AHCIController {
         regs.generic_control.CAP.write(cap_save);
         // profit?? http://10.45.1.22/uboot/latest/source/drivers/ata/ahci.c#L194
         regs.generic_control.PI.write(0xf);
-
-        // Intel needful-ness?
-        if self.dev.info.vendor_id == crate::pci::consts::VID_INTEL {
-            debug!("[AHCI] Intel Controller Detected: PID: {:#x}", self.dev.info.device_id);
-            let tmp = self.dev.read_config_word(0x92);
-            self.dev.write_config_word(0x92, tmp | 0xF);
-        }
 
         // Update information
         self.capability = regs.generic_control.CAP.read();
@@ -328,24 +300,12 @@ impl AHCIController {
         self.start_ports();
         self.port_scan();
 
-        // let ports = self.port_count();
-        // debug!("[AHCI] Ports Map: {:032b}", self.port_implemented_map());
-        // debug!("[AHCI] Controller support {} command slots", self.command_slot_count());
-        // self.port_scan();
-        // let sata_port = self.ports.iter().find(|p| {
-        //     if p.enabled {
-        //         if let AHCIHBAPortDevice::SATA = p.device {
-        //             return true;
-        //         }
-        //     }
-        //     false
-        // });
-        // if sata_port.is_some() {
-        //     let sata_port_num = sata_port.unwrap().number;
-        //     debug!("[AHCI] found SATA device on port {}", sata_port_num);
-        //     self.setup_port(sata_port_num);
-        self.test(0);
-        // }
+        for i in (0..32).rev() {
+            if self.link_map >> i & 0x1 == 1 {
+                self.test(i);
+                break;
+            }
+        }
     }
 
     fn controller_reset(&mut self) -> Result<(), ()> {
@@ -381,14 +341,15 @@ impl AHCIController {
             write_flush!(port_reg.CMD,tmp & !flags);
             sleep(Duration::from_millis(500)).expect("slept");
         }
-
         /* Add the spinup command to whatever mode bits may
 		 * already be on in the command register.
 		 */
         let tmp = port_reg.CMD.read();
         write_flush!(port_reg.CMD, tmp | PxCMD_SpinUp);
 
-        Self::sata_link_up(port_reg).expect("SATA Link Not Up");
+        if Self::sata_link_up(port_reg).is_err() {
+            return;
+        }
 
         // Error Clear
         port_reg.SERR.write(port_reg.SERR.read());
@@ -445,8 +406,8 @@ impl AHCIController {
     fn sata_link_up(port: &mut AHCIHBAPort) -> Result<(), ()> {
         let target = PIT::current_time() + AHCIPortLinkUpTimeout;
         loop {
-            let val = port.SSTS.read() & PxSSTS_DETMask;
-            if val == PxSSTS_DET_Ready {
+            let val = port.SSTS.read();
+            if val & PxSSTS_DETMask == PxSSTS_DET_Ready {
                 return Ok(());
             }
             if PIT::current_time() > target {

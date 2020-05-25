@@ -111,7 +111,7 @@ pub extern fn idle_process() {
 
 /// Internal scheduler struct which is not thread-safe.
 pub struct Scheduler {
-    processes: VecDeque<Process>,
+    pub processes: VecDeque<Process>,
     last_id: Option<Id>,
     pub cpus: Processors,
 }

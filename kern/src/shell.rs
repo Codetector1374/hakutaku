@@ -175,6 +175,10 @@ impl Shell {
             "ps" => {
                 SCHEDULER.critical(|s| {
                     println!("{:#?}", s.cpus);
+                    println!("========");
+                    for proc in s.processes.iter() {
+                        println!("Process: {}, {:?}", proc.pid, proc.state);
+                    }
                 });
                 Ok(0)
             }

@@ -1,8 +1,9 @@
-use crate::pci::device::PCIDevice;
+use crate::pci::device::{PCIDevice};
 use crate::pci::class::{PCIDeviceClass, HeaderType};
 use alloc::vec::Vec;
 use alloc::alloc::handle_alloc_error;
 use spin::Mutex;
+use crate::device::ahci::{AHCI, G_AHCI};
 
 pub mod device;
 pub mod class;
@@ -113,6 +114,33 @@ impl PCIDeviceInfo {
 }
 
 impl PCIController {
+    pub fn initialize_bus_with_devices(&mut self) {
+        use self::class::*;
+        info!("[PCI] Initializing PCI Devices");
+        self.scan_pci_bus();
+        let bus = self.enumerate_pci_bus();
+        for dev in bus.into_iter() {
+            trace!("PCIDevice on {} int: {}", dev.bus_location_str(), dev.get_int_line());
+            match dev.info.class {
+                PCIDeviceClass::MassStorageController(mass_storage) => {
+                    match mass_storage {
+                        PCIClassMassStorage::SATA(sata) => {
+                            match sata {
+                                PCIClassMassStroageSATA::AHCI => {
+                                    G_AHCI.initialize_device(dev)
+                                },
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+        info!("[PCI] Initialization Complete");
+    }
+
     pub fn enumerate_pci_bus(&self) -> Vec<PCIDevice> {
         if let Some(dev) = self.devices.as_ref() {
             return dev.clone()
@@ -121,13 +149,13 @@ impl PCIController {
     }
 
     pub fn scan_pci_bus(&mut self) {
-        debug!("[PCI] Scanning PCI Bus");
         let mut bus = Vec::<PCIDevice>::with_capacity(16);
         self.enumerate_bus(0, &mut bus);
         self.devices = Some(bus);
     }
 
     fn enumerate_bus(&self, bus: u8, vec: &mut Vec<PCIDevice>) {
+        debug!("Scanning bus {}", bus);
         for device_id in 0..32 {
             self.check_device(bus, device_id, vec);
         }
@@ -149,7 +177,12 @@ impl PCIController {
                 let mf = d.info.header_type.is_multi_function();
                 if let HeaderType::PCIBridge(_) = d.info.header_type {
                     let num = d.secondary_bus_number();
-                    self.enumerate_bus(num, vec);
+                    trace!("PCI Bridge to : {}", num);
+                    if num != bus {
+                        self.enumerate_bus(num, vec);
+                    } else {
+                        error!("PCI Bridge to self? on {}", bus);
+                    }
                 }
                 vec.push(d);
                 mf

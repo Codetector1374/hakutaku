@@ -82,9 +82,9 @@ impl ChainedPics {
         let mut wait_port: Port<u8> = Port::new(0x80);
         let mut wait = || { wait_port.write(0); };
 
-        let saved_mask1 = self.pics[0].data.read() & !0b100u8;
-        // let saved_mask2 = self.pics[1].data.read();
-        let saved_mask2 = 0;
+        // let saved_mask1 = self.pics[0].data.read() & !0b100u8;
+        let saved_mask1 = 0b11111000;
+        let saved_mask2 = 0xFF;
         debug!("PIC1 Mask: 0x{:x}, PIC2 Mask 0x{:x}", saved_mask1, saved_mask2);
 
         // Init Logic
@@ -98,9 +98,9 @@ impl ChainedPics {
         self.pics[1].data.write(self.pics[1].offset);
         wait();
 
-        self.pics[0].data.write(4);
+        self.pics[0].data.write(1 << 2); // Slave on Pin 2
         wait();
-        self.pics[1].data.write(2);
+        self.pics[1].data.write(2); // Slave of Pin 2
         wait();
 
         self.pics[0].data.write(ICW4_8086);

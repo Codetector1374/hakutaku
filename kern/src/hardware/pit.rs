@@ -1,6 +1,6 @@
 use x86_64::instructions::port::{PortWriteOnly, Port};
 use x86_64::instructions::interrupts::without_interrupts;
-use spin::Mutex;
+use spin::{Mutex, RwLock};
 use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
 
@@ -9,7 +9,7 @@ const PIT_CH1: u16 = 0x41;
 const PIT_CH2: u16 = 0x42;
 const PIT_CMD: u16 = 0x43;
 
-pub static GLOBAL_PIT: Mutex<PIT> = Mutex::new(PIT::new());
+pub static GLOBAL_PIT: RwLock<PIT> = RwLock::new(PIT::new());
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -74,6 +74,7 @@ impl PIT {
     fn setup(&mut self, interval: Duration, mode: PITMode) {
         let value = interval.as_nanos() / 838;
         assert!(value < 65535);
+        assert!(value >= 1);
         let value = value as u16;
         without_interrupts(|| {
             self.mode = mode;
@@ -99,7 +100,7 @@ impl PIT {
     }
 
     pub fn start_clock(&mut self) {
-        self.setup(MAX_SINGLE_WAIT_DURATION, PITMode::SquareWave);
+        self.setup(crate::config::SYSTEM_TIME_RESOLUTION, PITMode::SquareWave);
     }
 
     pub fn interrupt(&mut self) {
@@ -109,7 +110,7 @@ impl PIT {
 
     pub fn current_time() -> Duration {
         without_interrupts(|| {
-            GLOBAL_PIT.lock().time
+            GLOBAL_PIT.read().time
         })
     }
 }
@@ -120,10 +121,11 @@ const MAX_SINGLE_WAIT_DURATION: Duration = Duration::from_millis(50);
 // 65535 tick -> 54918330
 fn spin_wait_internal(d: Duration) {
     without_interrupts(||{
-        GLOBAL_PIT.lock().setup(d, PITMode::SWStrobe);
-        let value = GLOBAL_PIT.lock().read();
+        let mut pit = GLOBAL_PIT.write();
+        pit.setup(d, PITMode::SWStrobe);
+        let value = pit.read();
         loop {
-            let new_val = GLOBAL_PIT.lock().read();
+            let new_val = pit.read();
             if new_val > value {
                 break;
             }

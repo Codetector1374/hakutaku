@@ -74,7 +74,7 @@ extern "C" {
 pub extern "C" fn handle_context_switch(tf: &mut TrapFrame, cause: InterruptSource) {
     match cause {
         InterruptSource::APICTimer => {
-            trace!("Context Switching");
+            // trace!("Context Switching");
             SCHEDULER.switch(Ready, tf);
         },
         InterruptSource::SysCall => {

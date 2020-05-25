@@ -1,4 +1,4 @@
-use bitflags::_core::fmt::{Debug, Formatter};
+use core::fmt::{Debug, Formatter};
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {

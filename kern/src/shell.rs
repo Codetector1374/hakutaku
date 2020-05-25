@@ -11,9 +11,10 @@ use crate::process::scheduler::GlobalScheduler;
 use crate::SCHEDULER;
 use crate::hardware::pit::PIT;
 use kernel_api::syscall::sleep;
-use bitflags::_core::time::Duration;
+use core::time::Duration;
 use crate::device::usb::G_USB;
 use x86_64::instructions::interrupts::without_interrupts;
+use crate::device::ahci::G_AHCI;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -145,12 +146,9 @@ impl Shell {
                 print!("\n");
                 Ok(0)
             },
-            "sys" => {
-                unsafe {
-                    asm!("
-                    mov rax, 40
-                    int 0x80
-                    ":::"rax":"volatile", "intel");
+            "lsahci" => {
+                for dev in G_AHCI.attached_devices.read().iter() {
+                    println!("{:?}", dev);
                 }
                 Ok(0)
             },
@@ -180,12 +178,6 @@ impl Shell {
                 });
                 Ok(0)
             }
-            "u" => {
-                without_interrupts(||{
-                    G_USB.xhci.lock().as_mut().unwrap().send_nop();
-                });
-                Ok(0)
-            },
             "lspci" => {
                 let scan = command.args.len() >= 2 && command.args[1].eq("-s");
                 let devs = without_interrupts(||{

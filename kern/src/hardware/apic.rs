@@ -8,7 +8,7 @@ use volatile::Volatile;
 use spin::Mutex;
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::spin_wait;
-use bitflags::_core::time::Duration;
+use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
 
 pub mod timer;

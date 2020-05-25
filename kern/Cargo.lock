@@ -31,6 +31,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "core-io"
+version = "0.1.0"
+dependencies = [
+ "void",
+]
+
+[[package]]
 name = "cpuio"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,7 +57,7 @@ dependencies = [
 name = "kern"
 version = "0.1.0"
 dependencies = [
- "bitflags",
+ "core-io",
  "cpuio",
  "hashbrown",
  "kernel_api",
@@ -117,6 +124,12 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "stack-vec"
 version = "0.1.0"
+
+[[package]]
+name = "void"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 
 [[package]]
 name = "volatile"

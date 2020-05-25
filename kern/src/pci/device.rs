@@ -5,6 +5,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 use crate::pci::class::{HeaderType, PCIDeviceClass};
 use x86_64::PhysAddr;
 use alloc::vec::Vec;
+use alloc::string::String;
 
 pub mod xhci;
 
@@ -96,6 +97,15 @@ impl PCIDevice {
         } else {
             None
         }
+    }
+
+    pub fn get_int_line(&self) -> u8 {
+        let word = self.read_config_word(0x3c);
+        word as u8
+    }
+
+    pub fn bus_location_str(&self) -> String {
+        format!("{:04x}:{:02x}:{:02x}", self.bus, self.device_number, self.func)
     }
 
     fn populate_capability(&mut self) {
@@ -229,7 +239,16 @@ impl PCIDevice {
 
     /// The caller should check if device is a PCI Bridge
     pub(super) fn secondary_bus_number(&self) -> u8 {
-        let read = self.read_config_dword_dep(6);
+        let read = self.read_config_word(0x18);
+        debug!("Secondary Raw: {:#x}", read);
         (read >> 8) as u8
+    }
+}
+
+impl PartialEq for PCIDevice {
+    fn eq(&self, other: &Self) -> bool {
+        self.bus == other.bus
+            && self.device_number == other.device_number
+            && self.func == other.func
     }
 }

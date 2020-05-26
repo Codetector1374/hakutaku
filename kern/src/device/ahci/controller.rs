@@ -495,13 +495,13 @@ impl AHCIController {
         use pretty_hex::*;
         let mut buf = [0u16; 256];
         let mut lock = self.operation_structures[port as usize].as_ref().expect("").lock();
-        let count = Self::read_sector(lock.deref_mut(), port, 0, &mut buf).expect("");
+        let count = Self::read_sector(lock.deref_mut(), 0, &mut buf).expect("");
         let buf2: [u8; 512] = unsafe { core::mem::transmute(buf) };
         println!("size: {} Last Two Bytes {:x} {:x}", count, buf2[510], buf2[511]);
         // println!("First Sector: \n{:?}", buf2.as_ref().hex_dump());
     }
 
-    pub(super) fn read_sector(op_structure_lock: &mut AHCIPortCommStructures, port: u8, sector: u64, buf: &mut [u16]) -> Result<usize, ()> {
+    pub(super) fn read_sector(op_structure_lock: &mut AHCIPortCommStructures, sector: u64, buf: &mut [u16]) -> Result<usize, ()> {
         // let mut op_structure_lock = self.operation_structures[port as usize].as_ref().expect("").lock();
         op_structure_lock.port_reg.IS.write(!0); // Clear All Interrupts
         let slot = op_structure_lock.port_reg.find_free_command_slot().expect("free slot");
@@ -544,7 +544,7 @@ impl AHCIController {
                 break;
             }
             if op_structure_lock.port_reg.IS.read() >> 30 & 0x1 == 1 {
-                error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
+                error!("[AHCI] Disk Read Error Detected, slot {}", slot);
                 return Err(());
             }
             if PIT::current_time() >= timeout_target {
@@ -553,7 +553,7 @@ impl AHCIController {
             }
         }
         if op_structure_lock.port_reg.IS.read() >> 30 & 0x1 == 1 {
-            error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
+            error!("[AHCI] Disk Read Error Detected on, slot {}", slot);
             return Err(());
         }
         return Ok(min(512, buf.len() * 2));

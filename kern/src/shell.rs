@@ -212,6 +212,28 @@ impl Shell {
                 }
                 Ok(0)
             }
+            "rdblk" => {
+                use crate::storage::block::G_BLOCK_DEV_MGR;
+                use pretty_hex::*;
+                if command.args.len() >= 3 {
+                    let dev = &command.args[1];
+                    let sec = command.args[2].parse::<u64>().unwrap_or_else(|_| {0});
+                    match G_BLOCK_DEV_MGR.read().devices.get(dev) {
+                        Some(blk_dev) => {
+                            let mut buf = [0u8; 512];
+                            blk_dev.read_sector(sec, &mut buf);
+                            println!("HEX DUMP: \n{:?}", buf.as_ref().hex_dump());
+                        }
+                        _ => {
+                            println!("{} not found", dev);
+                        }
+                    }
+                    Ok(0)
+                } else {
+                    println!("rdblk [device] [sector]");
+                    Ok(-1)
+                }
+            },
             "exit" => {
                 Ok(-1)
             },

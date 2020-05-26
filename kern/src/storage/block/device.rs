@@ -1,6 +1,5 @@
 
 pub trait RootBlockDevice : BlockDevice {
-
 }
 
 pub trait BlockDevice {

@@ -1,4 +1,4 @@
-use crate::pci::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController};
+use crate::pci::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController, BridgeDevice};
 use crate::pci::class::PCISerialBusController::{FireWire, ACCESSBus, SSA, USBController, FibreChannel};
 use crate::pci::class::PCISerialBusUSB::{UHCI, OHCI, EHCI, XHCI, Device};
 use cpuio::UnsafePort;
@@ -44,6 +44,7 @@ pub enum PCIDeviceClass {
     MassStorageController(PCIClassMassStorage),
     NetworkController(u8, u8),
     SerialBusController(PCISerialBusController),
+    BridgeDevice(PCIClassBridgeDevice),
     Other(u8, u8, u8)
 }
 
@@ -55,7 +56,29 @@ impl PCIDeviceClass {
         match class {
             0x01 => MassStorageController(PCIClassMassStorage::from(sub,progif)),
             0x0C => SerialBusController(PCISerialBusController::from(sub, progif)),
+            0x6 => BridgeDevice(PCIClassBridgeDevice::from(sub, progif)),
             _ => Other(class, sub, progif)
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum PCIClassBridgeDevice {
+    HostBridge,
+    ISABridge,
+    PCItoPCIBridge(u8),
+    PCItoPCIHostBridge(u8),
+    Other(u8, u8)
+}
+
+impl PCIClassBridgeDevice {
+    pub fn from(sub: u8, progif: u8) -> PCIClassBridgeDevice {
+        match sub {
+            0x0 => PCIClassBridgeDevice::HostBridge,
+            0x1 => PCIClassBridgeDevice::ISABridge,
+            0x4 => PCIClassBridgeDevice::PCItoPCIBridge(progif),
+            0x9 => PCIClassBridgeDevice::PCItoPCIHostBridge(progif),
+            _ => PCIClassBridgeDevice::Other(sub, progif),
         }
     }
 }

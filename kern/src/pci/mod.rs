@@ -1,19 +1,22 @@
-use crate::pci::device::PCIDevice;
+use crate::pci::device::{PCIDevice};
 use crate::pci::class::{PCIDeviceClass, HeaderType};
 use alloc::vec::Vec;
 use alloc::alloc::handle_alloc_error;
 use spin::Mutex;
+use crate::device::ahci::{AHCI, G_AHCI};
 
 pub mod device;
 pub mod class;
 pub mod consts;
 
 pub static GLOBAL_PCI: Mutex<PCIController> = Mutex::new(PCIController {
-    devices: None
+    devices: None,
+    max_bus_num: 0
 });
 
 pub struct PCIController {
-    devices: Option<Vec<PCIDevice>>
+    devices: Option<Vec<PCIDevice>>,
+    max_bus_num: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +116,33 @@ impl PCIDeviceInfo {
 }
 
 impl PCIController {
+    pub fn initialize_bus_with_devices(&mut self) {
+        use self::class::*;
+        info!("[PCI] Initializing PCI Devices");
+        self.scan_pci_bus();
+        let bus = self.enumerate_pci_bus();
+        for dev in bus.into_iter() {
+            trace!("PCIDevice on {} int: {}", dev.bus_location_str(), dev.get_int_line());
+            match dev.info.class {
+                PCIDeviceClass::MassStorageController(mass_storage) => {
+                    match mass_storage {
+                        PCIClassMassStorage::SATA(sata) => {
+                            match sata {
+                                PCIClassMassStroageSATA::AHCI => {
+                                    G_AHCI.initialize_device(dev)
+                                },
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+        info!("[PCI] Initialization Complete");
+    }
+
     pub fn enumerate_pci_bus(&self) -> Vec<PCIDevice> {
         if let Some(dev) = self.devices.as_ref() {
             return dev.clone()
@@ -121,19 +151,22 @@ impl PCIController {
     }
 
     pub fn scan_pci_bus(&mut self) {
-        debug!("[PCI] Scanning PCI Bus");
         let mut bus = Vec::<PCIDevice>::with_capacity(16);
+        self.max_bus_num = 0;
         self.enumerate_bus(0, &mut bus);
         self.devices = Some(bus);
     }
 
-    fn enumerate_bus(&self, bus: u8, vec: &mut Vec<PCIDevice>) {
+    fn enumerate_bus(&mut self, bus: u8, vec: &mut Vec<PCIDevice>) {
+        if bus > self.max_bus_num {
+            self.max_bus_num = bus;
+        }
         for device_id in 0..32 {
             self.check_device(bus, device_id, vec);
         }
     }
 
-    fn check_device(&self, bus: u8, device: u8, vec: &mut Vec<PCIDevice>) {
+    fn check_device(&mut self, bus: u8, device: u8, vec: &mut Vec<PCIDevice>) {
         if self.check_function(bus, device, 0, vec) {
             for func in 1..8 {
                 self.check_function(bus, device, func, vec);
@@ -142,14 +175,25 @@ impl PCIController {
     }
 
     /// Returns: isMultiFunction
-    fn check_function(&self, bus: u8, device: u8, func: u8, vec: &mut Vec<PCIDevice>) -> bool {
+    fn check_function(&mut self, bus: u8, device: u8, func: u8, vec: &mut Vec<PCIDevice>) -> bool {
         let dev = PCIDevice::new(bus, device, func);
         match dev {
-            Some(d) => {
+            Some(mut d) => {
                 let mf = d.info.header_type.is_multi_function();
                 if let HeaderType::PCIBridge(_) = d.info.header_type {
-                    let num = d.secondary_bus_number();
-                    self.enumerate_bus(num, vec);
+                    let mut num = d.secondary_bus_number();
+                    if num == 0 {
+                        self.max_bus_num+=1;
+                        num = self.max_bus_num;
+                        d.set_secondary_bus_number(num);
+                        assert_ne!(d.secondary_bus_number(), 0);
+                    }
+                    trace!("PCI Bridge to : {}", num);
+                    if num != bus {
+                        self.enumerate_bus(num, vec);
+                    } else {
+                        error!("PCI Bridge to self? on {}", bus);
+                    }
                 }
                 vec.push(d);
                 mf

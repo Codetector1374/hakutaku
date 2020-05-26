@@ -125,7 +125,7 @@ impl From<PCIDevice> for XHCI {
                     PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
-                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
+                        PageTableFlags::WRITABLE | PageTableFlags::WRITE_THROUGH | PageTableFlags::PRESENT,
                         &mut fallocw,
                     ).expect("Unable to map").flush();
                 }
@@ -147,23 +147,6 @@ impl From<PCIDevice> for XHCI {
             info: Default::default(),
             ports: Mutex::new(Default::default()),
         }.internal_initialize()
-    }
-}
-
-bitflags! {
-    pub struct HCCFlags: u32 {
-        const ADDR64BIT = 0x1 << 0;
-        const BNC = 0x1 << 1;
-        /// 64 bit context size if true
-        const CONTEXTSIZE = 0x1 << 2;
-        const PORTPOWERCTRL = 0x1 << 3;
-        const PORTINDC = 0x1 << 4;
-        const LIGHTRST = 0x1 << 5;
-        const LTC = 0x1 << 6;
-        const NOSSID = 0x1 << 7;
-        const PARSEALLEVNT = 0x1 << 8;
-        const STOP = 0x1 << 9;
-        // not fully listed
     }
 }
 
@@ -270,9 +253,8 @@ impl XHCI {
         self
     }
 
-    pub fn hcc_flags(&mut self) -> HCCFlags {
-        let val = self.capability_regs.hcc_param1.read();
-        HCCFlags::from_bits_truncate(val)
+    pub fn hcc_flags(&mut self) -> u32 {
+        self.capability_regs.hcc_param1.read()
     }
 
     pub fn max_ports(&self) -> u8 {

@@ -11,7 +11,7 @@ use crate::interrupts::context_switch::{TrapFrame, restore_context_wrapper};
 use spin::Mutex;
 use x86_64::instructions::hlt;
 use crate::hardware::apic::GLOBAL_APIC;
-use crate::{SCHEDULER, lol};
+use crate::{SCHEDULER, kernel_initialization_process};
 use crate::process::state::State::Running;
 use crate::process::cpu::Processors;
 use x86_64::instructions::interrupts::without_interrupts;
@@ -111,7 +111,7 @@ pub extern fn idle_process() {
 
 /// Internal scheduler struct which is not thread-safe.
 pub struct Scheduler {
-    processes: VecDeque<Process>,
+    pub processes: VecDeque<Process>,
     last_id: Option<Id>,
     pub cpus: Processors,
 }

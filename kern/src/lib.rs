@@ -45,19 +45,21 @@ extern crate spin;
 extern crate multiboot2;
 extern crate x86_64;
 extern crate pc_keyboard;
+extern crate core_io;
+#[macro_use]
 extern crate alloc;
 extern crate hashbrown;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-#[macro_use]
-extern crate bitflags;
 
 #[macro_use]
 pub mod vga_buffer;
 #[macro_use]
 mod macros;
+pub mod storage;
+pub mod config;
 pub mod init;
 pub mod hardware;
 pub mod device;
@@ -159,7 +161,7 @@ fn kern_init(boot_info: &BootInformation) {
 
     // Start Clock
     trace!("starting clock");
-    GLOBAL_PIT.lock().start_clock();
+    GLOBAL_PIT.write().start_clock();
 
     unsafe {
         SCHEDULER.initialize();
@@ -171,32 +173,32 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
 
-    // // Disable Cache
-    // let cr0 = x86_64::registers::control::Cr0::read();
-    // debug!("CR0: {:?}", cr0);
-    // unsafe { x86_64::registers::control::Cr0::write(cr0 | Cr0Flags::CACHE_DISABLE) };
-    // x86_64::instructions::cache::wbinvd();
-
     kern_init(&boot_info);
+
     // Must initialize after allocator
     hardware::keyboard::initialize();
-    GLOBAL_PCI.lock().scan_pci_bus();
-    println!("Kern started");
+
     let mfg_string = x86_64::instructions::cpuid::mfgid();
     let str = String::from_utf8_lossy(&mfg_string).into_owned();
     println!("I'm running on {}", &str);
+    println!("Kernel Core Ready");
+
     // Load the first process
     let mut main_proc = Process::new();
     main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
-    main_proc.context.rip = lol as u64;
+    main_proc.context.rip = kernel_initialization_process as u64;
     SCHEDULER.add(main_proc);
-    // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
     SCHEDULER.start();
 }
 
-pub extern fn lol() {
+pub extern fn kernel_initialization_process() {
+    // PCI
+    GLOBAL_PCI.lock().initialize_bus_with_devices();
+
+    // Usb Proc
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
+
     let mut shell = Shell::new();
     loop {
         shell.shell("1> ");
@@ -204,7 +206,7 @@ pub extern fn lol() {
 }
 
 pub extern fn usb_process() -> ! {
-    G_AHCI.initialize();
+    // G_AHCI.initialize();
     loop {
         x86_64::instructions::hlt()
     }

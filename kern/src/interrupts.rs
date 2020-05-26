@@ -28,10 +28,18 @@ lazy_static! {
                 .set_stack_index(DOUBLE_FAULT_IST_INDEX as u16);
         }
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.non_maskable_interrupt.set_handler_fn(nmi_handler);
+        idt.alignment_check.set_handler_fn(alignment_check_handler);
+        idt.divide_error.set_handler_fn(div_by_zero_handler);
+        idt.overflow.set_handler_fn(overflow_handler);
+
+        idt[InterruptIndex::Spurious.as_usize()].set_handler_fn(spurious_irq);
+
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
         idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(apic_timer as u64);
         idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(xhci_handler as u64);
+        // Syscall
         idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
         idt
     };
@@ -42,6 +50,7 @@ lazy_static! {
 pub enum InterruptIndex {
     Timer = PIC1_OFFSET + 0,
     Keyboard = PIC1_OFFSET + 1,
+    Spurious = PIC1_OFFSET + 7,
     XHCI = PIC1_OFFSET + 11,
     ApicTimer = 0x30,
     SysCall = 0x80,
@@ -77,15 +86,13 @@ extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
     unsafe {PICS.lock().notify_end_of_interrupt(InterruptIndex::XHCI as u8) };
 }
 
-extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, ec: PageFaultErrorCode) {
+extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, _ec: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();
 
-    trace!("PAGE FAULT");
-    trace!("Faulting ADDR: {:?}", faulting_addr);
-    trace!("Error Code {:?}", ec);
     if faulting_addr.as_u64() >= MMIO_BASE {
+        error!("Faulting ADDR: {:?}", faulting_addr);
         panic!("MMIO FAULT");
     }
     // println!("{:#?}", stack_frame);
@@ -101,19 +108,42 @@ extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFr
             &mut lmao
         )
     }.expect("Can't map").flush();
-    trace!("Mapped VA: {:?}", faulting_addr);
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
-    trace!("PIT Interrupt");
-    GLOBAL_PIT.lock().interrupt();
+    // trace!("PIT Interrupt");
+    GLOBAL_PIT.write().interrupt();
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 }
 
+extern "x86-interrupt" fn nmi_handler(tf: &mut InterruptStackFrame) {
+    println!("NMI: {:#?}", tf);
+}
+
+extern "x86-interrupt" fn div_by_zero_handler(tf: &mut InterruptStackFrame) {
+    println!("DIV0: {:#?}", tf);
+}
+
+extern "x86-interrupt" fn overflow_handler(tf: &mut InterruptStackFrame) {
+    println!("overflow: {:#?}", tf);
+}
+
+extern "x86-interrupt" fn alignment_check_handler(tf: &mut InterruptStackFrame, ec: u64) {
+    println!("ALIGNMENT: EC: {}\n{:#?}",ec, tf);
+}
+
 extern "x86-interrupt" fn breakpoint_handler(tf: &mut InterruptStackFrame) {
     println!("TRAP: break\n{:#?}", tf);
+}
+
+extern "x86-interrupt" fn other_handler(tf: &mut InterruptStackFrame) {
+    println!("Other: break\n{:#?}", tf);
+}
+
+extern "x86-interrupt" fn spurious_irq(_tf: &mut InterruptStackFrame) {
+    trace!("Spurious IRQ7 detected");
 }
 
 extern "x86-interrupt" fn gp_fault_handler(

@@ -5,6 +5,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 use crate::pci::class::{HeaderType, PCIDeviceClass};
 use x86_64::PhysAddr;
 use alloc::vec::Vec;
+use alloc::string::String;
 
 pub mod xhci;
 
@@ -63,6 +64,7 @@ pub struct PCIDevice {
     pub info: PCIDeviceInfo,
 }
 
+
 impl PCIDevice {
     /// Slot number range from 0 to 31
     /// Func number range from 0 to 7
@@ -96,6 +98,15 @@ impl PCIDevice {
         } else {
             None
         }
+    }
+
+    pub fn get_int_line(&self) -> u8 {
+        let word = self.read_config_word(0x3c);
+        word as u8
+    }
+
+    pub fn bus_location_str(&self) -> String {
+        format!("{:04x}:{:02x}:{:02x}", self.bus, self.device_number, self.func)
     }
 
     fn populate_capability(&mut self) {
@@ -163,7 +174,7 @@ impl PCIDevice {
     }
 
     pub fn base_mmio_address(&self, bar: u8) -> Option<PhysAddr> {
-        /* Okay this is really complicated.
+        /* Okay this is complicated.
          * 1) Read the bar register
          * 2) Check bit 0, 1: I/O Space Mapped, 0: Memory Mapped
          * 3) If Memory: Check bit [2:1] => 00 : Must map below 4G
@@ -212,7 +223,6 @@ impl PCIDevice {
 
     /// This function returns a quad of Class, SubClass, Prog IF, Revision ID
     /// Note: executing this on an invalid device is UB
-
     pub fn device_info(&self) -> (u8, u8, u8, u8) {
         let config_word = self.read_config_dword_dep(2);
         let cc = (config_word >> 24) as u8;
@@ -223,13 +233,26 @@ impl PCIDevice {
     }
 
     pub fn header_type(&self) -> HeaderType {
-        let config_word = self.read_config_dword_dep(3);
-        HeaderType::from((config_word >> 16) as u8)
+        let config_word = self.read_config_word(super::consts::CONF_HEADER_TYPE_OFFSET);
+        HeaderType::from(config_word as u8)
     }
 
     /// The caller should check if device is a PCI Bridge
     pub(super) fn secondary_bus_number(&self) -> u8 {
-        let read = self.read_config_dword_dep(6);
+        let read = self.read_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET);
         (read >> 8) as u8
+    }
+
+    pub(super) fn set_secondary_bus_number(&mut self, n: u8) {
+        let read = self.read_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET) & 0x00FF;
+        self.write_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET, read | (n as u16) << 8);
+    }
+}
+
+impl PartialEq for PCIDevice {
+    fn eq(&self, other: &Self) -> bool {
+        self.bus == other.bus
+            && self.device_number == other.device_number
+            && self.func == other.func
     }
 }

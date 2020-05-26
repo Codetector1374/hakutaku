@@ -1,8 +1,7 @@
 use crate::process::process::Id;
 use crate::hardware::apic::GLOBAL_APIC;
 use hashbrown::HashMap;
-use core::fmt::Debug;
-use bitflags::_core::fmt::Formatter;
+use core::fmt::{Debug, Formatter};
 
 #[derive(Default)]
 pub struct Processors {

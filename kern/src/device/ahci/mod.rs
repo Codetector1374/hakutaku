@@ -6,6 +6,7 @@ use crate::device::ahci::controller::AHCIController;
 use crate::pci::device::PCIDevice;
 use crate::device::ahci::device::{AHCIDevice, AHCIAttachedDevice, AHCIBlockDevice};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 
 pub mod controller;
 pub mod structures;
@@ -16,7 +17,7 @@ pub static G_AHCI: AHCI = AHCI::new();
 
 pub struct AHCI {
     controllers: RwLock<Vec<AHCIController>>,
-    pub attached_devices: RwLock<Vec<AHCIAttachedDevice>>,
+    pub attached_devices: RwLock<Vec<Arc<AHCIAttachedDevice>>>,
 }
 
 impl AHCI {
@@ -56,9 +57,8 @@ impl AHCI {
 
     fn attach_ahci_device(&self, ctlr_id: usize, device: Box<dyn AHCIDevice + Send + Sync>) {
         // Also registers with BlockDevice
-        let ahci_blkdev = Box::new(AHCIBlockDevice::create(ctlr_id, device.port()));
-        let mut vec = self.attached_devices.write();
-        vec.push(AHCIAttachedDevice::create(ctlr_id, device.port(), device));
-        G_BLOCK_DEV_MGR.write().register_device(ahci_blkdev);
+        let dev = Arc::new(AHCIAttachedDevice::create(ctlr_id, device.port(), device));
+        self.attached_devices.write().push(dev.clone());
+        G_BLOCK_DEV_MGR.write().register_device(Box::new(AHCIBlockDevice::from(dev)));
     }
 }

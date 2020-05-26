@@ -22,7 +22,7 @@ pub trait AHCIDevice {
 
 pub struct AHCIAttachedDevice {
     device: Box<dyn AHCIDevice + Send + Sync>,
-    registers: Arc<Mutex<AHCIPortCommStructures>>,
+    comm_struct: Arc<Mutex<AHCIPortCommStructures>>,
     controller: usize,
     port: u8,
 }
@@ -39,7 +39,7 @@ impl AHCIAttachedDevice {
         let read_lock = G_AHCI.controllers.read();
         AHCIAttachedDevice {
             device,
-            registers: read_lock[controller].get_port_registers(port).expect("initialized"),
+            comm_struct: read_lock[controller].get_port_registers(port).expect("initialized"),
             controller,
             port,
         }
@@ -69,15 +69,13 @@ impl AHCIDevice for AHCISATADevice {
 }
 
 pub struct AHCIBlockDevice {
-    controller: usize,
-    port: u8,
+    dev: Arc<AHCIAttachedDevice>
 }
 
-impl AHCIBlockDevice {
-    pub fn create(controller: usize, port: u8) -> AHCIBlockDevice {
-        AHCIBlockDevice {
-            controller,
-            port,
+impl From<Arc<AHCIAttachedDevice>> for AHCIBlockDevice {
+    fn from(dev: Arc<AHCIAttachedDevice>) -> Self {
+        Self {
+            dev,
         }
     }
 }
@@ -89,7 +87,7 @@ impl BlockDevice for AHCIBlockDevice {
         panic!("Unsupported");
     }
 
-    fn write_sector(&mut self, sector: u64, buf: &[u8]) -> core_io::Result<usize> {
+    fn write_sector(&mut self, _sector: u64, _buf: &[u8]) -> core_io::Result<usize> {
         panic!("Unsupported");
     }
 }

@@ -159,6 +159,15 @@ impl Shell {
                 }
                 Ok(0)
             },
+            "help" => {
+                print!("You call out for help.");
+                for i in 0..3 {
+                    sleep(Duration::from_secs(1)).expect("sleep()");
+                    print!(".")
+                }
+                println!("\nBut no one answers.");
+                Ok(0)
+            }
             "sleep" => {
                 if command.args.len() > 1 {
                     let sec = command.args[1].parse::<u64>().unwrap_or_else(|_| {0});

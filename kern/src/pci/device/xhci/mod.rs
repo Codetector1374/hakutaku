@@ -125,7 +125,7 @@ impl From<PCIDevice> for XHCI {
                     PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
-                        PageTableFlags::WRITABLE | PageTableFlags::PRESENT,
+                        PageTableFlags::WRITABLE | PageTableFlags::WRITE_THROUGH | PageTableFlags::PRESENT,
                         &mut fallocw,
                     ).expect("Unable to map").flush();
                 }

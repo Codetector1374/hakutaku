@@ -240,7 +240,6 @@ impl PCIDevice {
     /// The caller should check if device is a PCI Bridge
     pub(super) fn secondary_bus_number(&self) -> u8 {
         let read = self.read_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET);
-        debug!("Secondary Raw: {:#x}", read);
         (read >> 8) as u8
     }
 

@@ -152,6 +152,13 @@ impl Shell {
                 }
                 Ok(0)
             },
+            "lsblk" => {
+                use crate::storage::block::G_BLOCK_DEV_MGR;
+                for (name, _) in G_BLOCK_DEV_MGR.read().devices.iter() {
+                    println!("device: {}", name);
+                }
+                Ok(0)
+            },
             "sleep" => {
                 if command.args.len() > 1 {
                     let sec = command.args[1].parse::<u64>().unwrap_or_else(|_| {0});

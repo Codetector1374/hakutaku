@@ -1,5 +1,5 @@
 
-pub trait RootBlockDevice {
+pub trait RootBlockDevice : BlockDevice {
 
 }
 

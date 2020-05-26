@@ -1,9 +1,11 @@
 use spin::RwLock;
 use alloc::vec::Vec;
 use crate::pci::GLOBAL_PCI;
+use crate::storage::block::G_BLOCK_DEV_MGR;
 use crate::device::ahci::controller::AHCIController;
 use crate::pci::device::PCIDevice;
-use crate::device::ahci::device::{AHCIDevice, AHCIAttachedDevice};
+use crate::device::ahci::device::{AHCIDevice, AHCIAttachedDevice, AHCIBlockDevice};
+use alloc::boxed::Box;
 
 pub mod controller;
 pub mod structures;
@@ -42,14 +44,21 @@ impl AHCI {
                     let id = ctlrs.len() - 1;
                     (id, ctlrs[id].port_scan())
                 };
-                let mut vec = self.attached_devices.write();
                 for device in devices.into_iter() {
-                    vec.push(AHCIAttachedDevice::create(ctlr_id, device.port(), device))
+                    self.attach_ahci_device(ctlr_id, device);
                 }
             },
             None => {
                 error!("[AHCI] Failed to initialize controller at {}", loc_str);
             }
         }
+    }
+
+    fn attach_ahci_device(&self, ctlr_id: usize, device: Box<dyn AHCIDevice + Send + Sync>) {
+        // Also registers with BlockDevice
+        let ahci_blkdev = Box::new(AHCIBlockDevice::create(ctlr_id, device.port()));
+        let mut vec = self.attached_devices.write();
+        vec.push(AHCIAttachedDevice::create(ctlr_id, device.port(), device));
+        G_BLOCK_DEV_MGR.write().register_device(ahci_blkdev);
     }
 }

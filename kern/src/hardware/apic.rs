@@ -70,7 +70,7 @@ impl APIC {
                 PAGE_TABLE.write().map_to(
                     Page::<Size4KiB>::from_start_address(va).expect("valid page bound"),
                     PhysFrame::from_start_address(apic_base).expect("pa alignment"),
-                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                    PageTableFlags::PRESENT | PageTableFlags::WRITE_THROUGH | PageTableFlags::WRITABLE,
                     &mut alloc_wrapper,
                 ).expect("Unable to map APIC").flush()
             })

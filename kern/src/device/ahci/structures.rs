@@ -2,6 +2,7 @@ use volatile::Volatile;
 use alloc::boxed::Box;
 use x86_64::PhysAddr;
 use x86_64::instructions::cache::wbinvd;
+use crate::device::ahci::controller::AHCIHBAPort;
 
 #[repr(u8)]
 pub enum FISType {
@@ -111,9 +112,11 @@ impl Default for CommandHeader {
     }
 }
 
-#[derive(Default)]
-pub struct CommandTableList {
-    pub cmd_tables: [Option<Box<CommandTable>>; 32],
+pub struct AHCIPortCommStructures {
+    pub(super) port_reg: &'static mut AHCIHBAPort,
+    pub(super) command_list: CommandList,
+    pub(super) receive_fis: ReceivedFIS,
+    pub command_tables: [Box<CommandTable>; 32],
 }
 
 #[repr(C, align(128))]

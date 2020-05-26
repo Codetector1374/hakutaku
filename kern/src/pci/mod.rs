@@ -158,7 +158,6 @@ impl PCIController {
     }
 
     fn enumerate_bus(&mut self, bus: u8, vec: &mut Vec<PCIDevice>) {
-        debug!("Scanning bus {}", bus);
         if bus > self.max_bus_num {
             self.max_bus_num = bus;
         }

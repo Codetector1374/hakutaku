@@ -10,12 +10,17 @@ use volatile::{ReadOnly, Volatile, WriteOnly};
 use kernel_api::syscall::sleep;
 use core::time::Duration;
 use alloc::boxed::Box;
-use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTableList, CommandTable, FISType, FISRegH2D};
+use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTable, FISType, FISRegH2D, AHCIPortCommStructures};
 use crate::hardware::pit::PIT;
 use super::consts::*;
 use core::cmp::min;
 use crate::device::ahci::device::{AHCISATADevice, AHCIDevice};
 use alloc::vec::Vec;
+use spin::{Mutex, RwLock};
+use alloc::sync::Arc;
+use pc_keyboard::KeyCode::Mute;
+use core::ops::{Deref, DerefMut};
+use core::borrow::BorrowMut;
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -30,9 +35,7 @@ pub struct AHCIController {
     physical_base_addr: PhysAddr,
     regs: Option<&'static mut AHCIRegisters>,
     ports: [AHCIHBAPortStatus; 32],
-    command_lists: [Option<Box<CommandList>>; 32],
-    fis_list: [Option<Box<ReceivedFIS>>; 32],
-    cmd_tables: [CommandTableList; 32],
+    operation_structures: [Option<Arc<Mutex<AHCIPortCommStructures>>>; 32],
     capability: u32,
     port_map: u32,
     n_port: u32,
@@ -52,7 +55,7 @@ const_assert_size!(AHCIRegisters, 0x1100);
 
 #[repr(C)]
 #[allow(non_snake_case)]
-struct AHCIHBAPort {
+pub(super) struct AHCIHBAPort {
     /// Command List Base Address (Host -> Device)
     CommandListBase_L: Volatile<u32>,
     CommandListBase_H: Volatile<u32>,
@@ -195,11 +198,9 @@ impl AHCIController {
             let mut controller = AHCIController {
                 dev,
                 physical_base_addr: PhysAddr::new(0),
-                regs: None,
-                ports: [AHCIHBAPortStatus::default(); 32],
-                command_lists: [None; 32],
-                fis_list: [None; 32],
-                cmd_tables: Default::default(),
+                regs: Default::default(),
+                ports: Default::default(),
+                operation_structures: Default::default(),
                 capability: Default::default(),
                 port_map: Default::default(),
                 n_port: 0,
@@ -210,6 +211,13 @@ impl AHCIController {
         }
         warn!("[AHCI] create_from_device: not AHCI device, {:?}", dev.info.class);
         None
+    }
+
+    pub(super) fn get_port_registers(&self, port: u8) -> Option<Arc<Mutex<AHCIPortCommStructures>>> {
+        match &self.operation_structures[port as usize] {
+            Some(s) => Some(s.clone()),
+            _ => None,
+        }
     }
 
     fn internal_initialize(&mut self) {
@@ -241,7 +249,7 @@ impl AHCIController {
                     PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("va_align"),
                         PhysFrame::<Size4KiB>::from_start_address(paddr).expect("pa_align"),
-                        PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::PRESENT,
+                        PageTableFlags::WRITABLE | PageTableFlags::WRITE_THROUGH | PageTableFlags::PRESENT,
                         &mut fallocw,
                     ).expect("mapped").flush();
                 }
@@ -389,6 +397,7 @@ impl AHCIController {
         if tmp & PxSSTS_DETMask == PxSSTS_DET_Ready {
             self.link_map |= 0x1 << port;
         }
+        let static_mut_port_ref = unsafe { &mut *(port_reg as *mut AHCIHBAPort) };
     }
 
     fn sata_link_up(port: &mut AHCIHBAPort) -> Result<(), ()> {
@@ -426,9 +435,18 @@ impl AHCIController {
             return;
         }
 
+        self.operation_structures[port as usize].replace(Arc::new(Mutex::new(
+            AHCIPortCommStructures {
+                port_reg: unsafe { &mut *(port_reg as *mut AHCIHBAPort) },
+                command_list: Default::default(),
+                receive_fis: Default::default(),
+                command_tables: Default::default(),
+            }
+        )));
+        let mut op_struct_lock = self.operation_structures[port as usize].as_ref().expect("").lock();
+
         // Setup Lists, FISes
-        self.command_lists[port as usize].replace(Box::new(CommandList::default()));
-        let ptr_cmd_list = self.command_lists[port as usize].as_ref().expect("some").as_ref() as *const CommandList;
+        let ptr_cmd_list = &op_struct_lock.command_list as *const CommandList;
         // Translate VA => PA
         let cmd_list_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_cmd_list as u64)).expect("has physical mapping")
@@ -436,8 +454,7 @@ impl AHCIController {
         assert!(cmd_list_pa.is_aligned(1024u64), "CLB Alignment");
         regs.ports[port as usize].set_command_list_base(cmd_list_pa);
 
-        self.fis_list[port as usize].replace(Box::new(ReceivedFIS::default()));
-        let ptr_fis = self.fis_list[port as usize].as_ref().expect("").as_ref() as *const ReceivedFIS;
+        let ptr_fis = &op_struct_lock.receive_fis as *const ReceivedFIS;
         let fis_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(VirtAddr::new(ptr_fis as u64)).expect("mapped")
         });
@@ -446,13 +463,13 @@ impl AHCIController {
 
         let port_reg = &mut regs.ports[port as usize];
         // Initialize each command in the CMDList
-        for (idx, cmd_header) in self.command_lists[port as usize].as_mut().expect("thing").commands.iter_mut().enumerate() {
-            cmd_header.prdtl = 8;
-            self.cmd_tables[port as usize].cmd_tables[idx].replace(Box::new(CommandTable::default()));
-            let cmd_va_ptr = self.cmd_tables[port as usize].cmd_tables[idx].as_ref().expect("thing").as_ref() as *const CommandTable;
+        for idx in 0..op_struct_lock.command_list.commands.len() {
+            let cmd_va_ptr = op_struct_lock.command_tables[idx].as_ref() as *const CommandTable;
             let cmd_tbl_pa = without_interrupts(|| {
                 PAGE_TABLE.read().translate_addr(VirtAddr::new(cmd_va_ptr as u64)).expect("mapped")
             });
+            let cmd_header = &mut op_struct_lock.command_list.commands[idx];
+            cmd_header.prdtl = 8;
             cmd_header.ctba = cmd_tbl_pa;
         }
 
@@ -477,53 +494,56 @@ impl AHCIController {
     fn test(&mut self, port: u8) {
         use pretty_hex::*;
         let mut buf = [0u16; 256];
-        let count = self.read_sector(port, 0, &mut buf).expect("");
+        let mut lock = self.operation_structures[port as usize].as_ref().expect("").lock();
+        let count = Self::read_sector(lock.deref_mut(), port, 0, &mut buf).expect("");
         let buf2: [u8; 512] = unsafe { core::mem::transmute(buf) };
         println!("size: {} Last Two Bytes {:x} {:x}", count, buf2[510], buf2[511]);
         // println!("First Sector: \n{:?}", buf2.as_ref().hex_dump());
     }
 
-    fn read_sector(&mut self, port: u8, sector: u64, buf: &mut [u16]) -> Result<usize, ()> {
-        let hba_port = &mut self.regs.as_mut().expect("").ports[port as usize];
-        hba_port.IS.write(!0); // Clear All Interrupts
-        let slot = hba_port.find_free_command_slot().expect("free slot");
-        let cmd_header = &mut self.command_lists[port as usize].as_mut().expect("").commands[slot as usize];
+    pub(super) fn read_sector(op_structure_lock: &mut AHCIPortCommStructures, port: u8, sector: u64, buf: &mut [u16]) -> Result<usize, ()> {
+        // let mut op_structure_lock = self.operation_structures[port as usize].as_ref().expect("").lock();
+        op_structure_lock.port_reg.IS.write(!0); // Clear All Interrupts
+        let slot = op_structure_lock.port_reg.find_free_command_slot().expect("free slot");
+        let cmd_header = &mut op_structure_lock.command_list.commands[slot as usize];
         // H2D FIS is 5 DWORDs
         cmd_header.flags = (core::mem::size_of::<FISRegH2D>() / 4) as u16; // 5 DWORDs
         cmd_header.prdtl = 1;
 
-        let cmd_tbl = self.cmd_tables[port as usize].cmd_tables[slot as usize].as_mut().expect("lol").as_mut();
-        *cmd_tbl = CommandTable::default(); // zero table
-        cmd_tbl.prtd_entry[0].flags = 0x1 << 31 | 511; // TODO Fixed sector size
-        let bufpa = without_interrupts(|| {
-            PAGE_TABLE.read().translate_addr(VirtAddr::new(buf.as_mut_ptr() as u64)).expect("mapped")
-        });
-        cmd_tbl.prtd_entry[0].dba = bufpa;
+        {
+            let cmd_tbl = op_structure_lock.command_tables[slot as usize].as_mut();
+            *cmd_tbl = CommandTable::default(); // zero table
+            cmd_tbl.prtd_entry[0].flags = 0x1 << 31 | 511; // TODO Fixed sector size
+            let bufpa = without_interrupts(|| {
+                PAGE_TABLE.read().translate_addr(VirtAddr::new(buf.as_mut_ptr() as u64)).expect("mapped")
+            });
+            cmd_tbl.prtd_entry[0].dba = bufpa;
 
-        cmd_tbl.cfis.fis_type = FISType::RegH2d;
-        cmd_tbl.cfis.flags = 0x1 << 7;
-        cmd_tbl.cfis.command = 0x25; // Read DMA (Non Ext: 256 sectors max)
-        cmd_tbl.cfis.set_lba(sector);
-        cmd_tbl.cfis.device = 1 << 6; // LBA Mode
-        cmd_tbl.cfis.count = 1;
+            cmd_tbl.cfis.fis_type = FISType::RegH2d;
+            cmd_tbl.cfis.flags = 0x1 << 7;
+            cmd_tbl.cfis.command = 0x25; // Read DMA (Non Ext: 256 sectors max)
+            cmd_tbl.cfis.set_lba(sector);
+            cmd_tbl.cfis.device = 1 << 6; // LBA Mode
+            cmd_tbl.cfis.count = 1;
+        }
 
         let timeout_target = PIT::current_time() + Duration::from_secs(5);
-        while hba_port.TFD.read() & 0b10001000 != 0 {
+        while op_structure_lock.port_reg.TFD.read() & 0b10001000 != 0 {
             sleep(Duration::from_micros(1)).expect("slept");
             if PIT::current_time() > timeout_target {
                 error!("[AHCI] timeout waiting for device to idle");
-                error!("[AHCI] TFD Status: {:032b}", hba_port.TFD.read());
+                error!("[AHCI] TFD Status: {:032b}", op_structure_lock.port_reg.TFD.read());
                 return Err(());
             }
         }
 
-        write_flush!(hba_port.CI, 1u32 << slot);
+        write_flush!(op_structure_lock.port_reg.CI, 1u32 << slot);
         let timeout_target = PIT::current_time() + Duration::from_secs(5);
         loop {
-            if hba_port.CI.read() >> slot as u32 & 0x1 == 0 {
+            if op_structure_lock.port_reg.CI.read() >> slot as u32 & 0x1 == 0 {
                 break;
             }
-            if hba_port.IS.read() >> 30 & 0x1 == 1 {
+            if op_structure_lock.port_reg.IS.read() >> 30 & 0x1 == 1 {
                 error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
                 return Err(());
             }
@@ -532,7 +552,7 @@ impl AHCIController {
                 return Err(());
             }
         }
-        if hba_port.IS.read() >> 30 & 0x1 == 1 {
+        if op_structure_lock.port_reg.IS.read() >> 30 & 0x1 == 1 {
             error!("[AHCI] Disk Read Error Detected on Port {}, slot {}", port, slot);
             return Err(());
         }

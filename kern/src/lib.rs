@@ -188,15 +188,16 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
     main_proc.context.rip = kernel_initialization_process as u64;
     SCHEDULER.add(main_proc);
-    // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
     SCHEDULER.start();
 }
 
 pub extern fn kernel_initialization_process() {
     // PCI
     GLOBAL_PCI.lock().initialize_bus_with_devices();
+
+    // Usb Proc
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {

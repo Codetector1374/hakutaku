@@ -397,7 +397,6 @@ impl AHCIController {
         if tmp & PxSSTS_DETMask == PxSSTS_DET_Ready {
             self.link_map |= 0x1 << port;
         }
-        let static_mut_port_ref = unsafe { &mut *(port_reg as *mut AHCIHBAPort) };
     }
 
     fn sata_link_up(port: &mut AHCIHBAPort) -> Result<(), ()> {

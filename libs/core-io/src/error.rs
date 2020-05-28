@@ -1,3 +1,5 @@
+use core::fmt::{Debug, Formatter};
+
 /// A specialized [`Result`](../result/enum.Result.html) type for I/O
 /// operations.
 ///
@@ -197,6 +199,12 @@ impl From<ErrorKind> for Error {
     #[inline]
     fn from(kind: ErrorKind) -> Error {
         Error { kind }
+    }
+}
+
+impl Debug for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.kind)
     }
 }
 

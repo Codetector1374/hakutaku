@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use core::fmt::Write;
 use core::str;
-use crate::hardware::keyboard::blocking_get_char;
+use crate::hardware::keyboard::{blocking_get_char, GLOB_KEYBOARD};
 use crate::pci::device::PCIDevice;
 use crate::pci::*;
 use crate::pci::class::*;
@@ -161,7 +161,7 @@ impl Shell {
             },
             "help" => {
                 print!("You call out for help.");
-                for i in 0..3 {
+                for _ in 0..3 {
                     sleep(Duration::from_secs(1)).expect("sleep()");
                     print!(".")
                 }
@@ -221,8 +221,11 @@ impl Shell {
                     match G_BLOCK_DEV_MGR.read().devices.get(dev) {
                         Some(blk_dev) => {
                             let mut buf = [0u8; 512];
-                            blk_dev.read_sector(sec, &mut buf);
-                            println!("HEX DUMP: \n{:?}", buf.as_ref().hex_dump());
+                            blk_dev.read_sector(sec, &mut buf).ok().expect("thing");
+                            println!("First Half: \n{:?}", buf[..256].as_ref().hex_dump());
+                            println!("press any key to continue...");
+                            blocking_get_char();
+                            println!("Second Half: \n{:?}", buf[256..].as_ref().hex_dump());
                         }
                         _ => {
                             println!("{} not found", dev);

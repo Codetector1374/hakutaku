@@ -91,4 +91,10 @@ impl BlockDeviceManager {
             }
         }
     }
+
+    pub fn list_devices(&self) -> Vec<String> {
+        let mut a:Vec<String> = self.devices.keys().cloned().collect();
+        a.sort();
+        a
+    }
 }

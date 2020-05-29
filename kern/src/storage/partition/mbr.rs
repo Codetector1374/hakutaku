@@ -29,8 +29,8 @@ impl Debug for CHS {
 }
 const_assert_size!(CHS, 3);
 
-#[repr(C, packed)]
-#[derive(Default)]
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
 pub struct PartitionEntry {
     pub boot_indicator: u8,
     _chs_start: CHS,
@@ -40,6 +40,7 @@ pub struct PartitionEntry {
     // TODO Assume Endian
     pub total_sectors: u32,
 }
+const_assert_size!(PartitionEntry, 16);
 
 impl Into<Partition> for &PartitionEntry {
     fn into(self) -> Partition {
@@ -59,7 +60,6 @@ impl Debug for PartitionEntry {
     }
 }
 
-const_assert_size!(PartitionEntry, 16);
 
 /// The master boot record (MBR).
 #[repr(C, packed)]
@@ -72,15 +72,16 @@ pub struct MasterBootRecord {
 
 impl Debug for MasterBootRecord {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let parts = {self.parts};
         f.write_fmt(format_args!("MBR Entry:
             Part1: {:?}
             Part2: {:?}
             Part3: {:?}
             Part4: {:?}
             MagicNumber: {:02X}{:02X}",
-                                 self.parts[0], self.parts[1],
-                                 self.parts[2], self.parts[3],
-                                 self.magic_number[0], self.magic_number[1]))
+                                 parts[0], parts[1],
+                                 parts[2], parts[3],
+                                 {self.magic_number[0]}, {self.magic_number[1]}))
     }
 }
 
@@ -141,8 +142,9 @@ impl MasterBootRecord {
         if read_size != sector_size as usize {
             panic!("reading from a sector produced {} bytes instead of {}", read_size, sector_size);
         }
+        let parts = {mbr.parts};
         if mbr.magic_number[0] == 0x55 && mbr.magic_number[1] == 0xAA {
-            for (i, part) in mbr.parts.iter().enumerate() {
+            for (i, part) in parts.iter().enumerate() {
                check_boot_indicator(part, i as u8)?;
             }
             Ok(mbr)

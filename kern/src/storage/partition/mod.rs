@@ -35,7 +35,7 @@ pub fn scan_for_partitions<T: BlockDevice + ?Sized>(dev: &T) -> Vec<Partition> {
     let mut vec = Vec::new();
     let mbr = MasterBootRecord::from(dev).ok();
     if let Some(mbr) = mbr {
-        for p in mbr.parts.iter() {
+        for p in {mbr.parts}.iter() {
             if p.offset > 0 && p.total_sectors > 0 && p.partition_type != 0 {
                 vec.push(p.into());
             }

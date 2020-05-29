@@ -37,6 +37,7 @@ use crate::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
 use x86_64::registers::control::Cr0Flags;
 use alloc::string::String;
+use crate::device::usb::G_USB;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -92,7 +93,7 @@ fn kern_init(boot_info: &BootInformation) {
     interrupts::init_idt();
     unsafe {
         PICS.lock().initialize();
-        // PICS.lock().unmask_interrupt(InterruptIndex::XHCI as u8);
+        PICS.lock().unmask_interrupt(InterruptIndex::XHCI as u8);
     };
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
@@ -206,8 +207,17 @@ pub extern fn kernel_initialization_process() {
 }
 
 pub extern fn usb_process() -> ! {
-    // G_AHCI.initialize();
+    use crate::device::usb::G_USB;
+
+    without_interrupts(|| {
+        G_USB.initialize();
+        G_USB.xhci.lock().as_mut().expect("").send_nop();
+    });
+
     loop {
-        x86_64::instructions::hlt()
+        // without_interrupts(||{
+        //     G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
+        // });
+        sleep(Duration::from_millis(100)).unwrap();
     }
 }

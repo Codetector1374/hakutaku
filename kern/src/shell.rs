@@ -154,7 +154,7 @@ impl Shell {
             },
             "lsblk" => {
                 use crate::storage::block::G_BLOCK_DEV_MGR;
-                for (name, _) in G_BLOCK_DEV_MGR.read().devices.iter() {
+                for name in G_BLOCK_DEV_MGR.read().list_devices() {
                     println!("device: {}", name);
                 }
                 Ok(0)
@@ -168,6 +168,12 @@ impl Shell {
                 println!("\nBut no one answers.");
                 Ok(0)
             }
+            "u" => {
+                without_interrupts(|| {
+                    G_USB.xhci.lock().as_mut().expect("LOL").send_nop();
+                });
+                Ok(0)
+            },
             "sleep" => {
                 if command.args.len() > 1 {
                     let sec = command.args[1].parse::<u64>().unwrap_or_else(|_| {0});

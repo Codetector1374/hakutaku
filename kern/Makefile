@@ -21,6 +21,9 @@ assembly_object_files := $(patsubst src/arch/$(arch)/%.asm, \
 
 all: $(iso)
 
+bochs: $(iso)
+	bochs -q
+
 copy: $(kernel)
 	@cp $(grub_cfg) $(DEVICE)/boot/grub/grub.cfg
 	cp $(kernel) $(DEVICE)/boot/kernel.bin

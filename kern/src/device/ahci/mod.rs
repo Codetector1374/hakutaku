@@ -59,6 +59,6 @@ impl AHCI {
         // Also registers with BlockDevice
         let dev = Arc::new(AHCIAttachedDevice::create(ctlr_id, device.port(), device));
         self.attached_devices.write().push(dev.clone());
-        G_BLOCK_DEV_MGR.write().register_device(Arc::new(AHCIBlockDevice::from(dev)));
+        G_BLOCK_DEV_MGR.write().register_root_device(Arc::new(AHCIBlockDevice::from(dev)));
     }
 }

@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 use core::fmt::{Debug, Formatter};
-use crate::storage::block::device::{RootBlockDevice, BlockDevice};
+use crate::storage::block::device::BlockDevice;
 use crate::device::ahci::{AHCI, G_AHCI};
 use spin::Mutex;
 use crate::device::ahci::controller::{AHCIHBAPort, AHCIController};
@@ -84,8 +84,6 @@ impl From<Arc<AHCIAttachedDevice>> for AHCIBlockDevice {
     }
 }
 
-impl RootBlockDevice for AHCIBlockDevice {}
-
 impl BlockDevice for AHCIBlockDevice {
     fn read_sector(&self, sector: u64, buf: &mut [u8]) -> core_io::Result<usize> {
         let mut port_comm = self.dev.comm_struct.lock();
@@ -99,7 +97,7 @@ impl BlockDevice for AHCIBlockDevice {
         Ok(min(512, buf.len()))
     }
 
-    fn write_sector(&mut self, _sector: u64, _buf: &[u8]) -> core_io::Result<usize> {
+    fn write_sector(&self, _sector: u64, _buf: &[u8]) -> core_io::Result<usize> {
         panic!("Unsupported");
     }
 }

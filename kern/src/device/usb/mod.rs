@@ -1,8 +1,11 @@
 pub mod interrupt;
+pub mod xhci;
 
 use spin::Mutex;
-use crate::pci::device::xhci::XHCI;
-use crate::pci::GLOBAL_PCI;
+use crate::device::usb::xhci::XHCI;
+use crate::device::pci::GLOBAL_PCI;
+use crate::device::pci::class::PCISerialBusUSB;
+use crate::device::pci::device::PCIDevice;
 
 pub static G_USB: USBSystem = USBSystem {
     xhci: Mutex::new(None),
@@ -15,14 +18,16 @@ pub struct USBSystem {
 }
 
 impl USBSystem {
-    pub fn initialize(&self) {
-        // Populate XHCI Controller
-        let opt_xhci = XHCI::create_from_bus(GLOBAL_PCI.lock());
-        if let Some(xhci) = opt_xhci {
-            self.xhci.lock().replace(xhci);
-            debug!("[USB] XHCI Controller initialized");
-        } else {
-            warn!("[USB] No XHCI Controller Found");
-        };
+    pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
+        match ctlr_type {
+            PCISerialBusUSB::XHCI => {
+                let dev = XHCI::create_from_device(dev).expect("created");
+                self.xhci.lock().replace(dev);
+            },
+            _ => {
+                debug!("[USB] Unknown USB Host Type at {}: {:?}",
+                       dev.bus_location_str(), dev.info.class);
+            }
+        }
     }
 }

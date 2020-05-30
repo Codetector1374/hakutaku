@@ -1,9 +1,9 @@
 use spin::RwLock;
 use alloc::vec::Vec;
-use crate::pci::GLOBAL_PCI;
+use crate::device::pci::GLOBAL_PCI;
+use crate::device::pci::device::PCIDevice;
 use crate::storage::block::G_BLOCK_DEV_MGR;
 use crate::device::ahci::controller::AHCIController;
-use crate::pci::device::PCIDevice;
 use crate::device::ahci::device::{AHCIDevice, AHCIAttachedDevice, AHCIBlockDevice};
 use alloc::boxed::Box;
 use alloc::sync::Arc;

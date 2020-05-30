@@ -3,10 +3,6 @@ use alloc::string::String;
 use core::fmt::Write;
 use core::str;
 use crate::hardware::keyboard::{blocking_get_char, GLOB_KEYBOARD};
-use crate::pci::device::PCIDevice;
-use crate::pci::*;
-use crate::pci::class::*;
-use crate::pci::device::xhci::XHCI;
 use crate::process::scheduler::GlobalScheduler;
 use crate::SCHEDULER;
 use crate::hardware::pit::PIT;
@@ -24,7 +20,6 @@ enum Error {
 }
 
 pub struct Shell {
-    xhci: Option<XHCI>,
 }
 
 /// A structure representing a single shell command.
@@ -63,7 +58,6 @@ impl Command {
 impl Shell {
     pub fn new() -> Shell {
         Shell{
-            xhci: None,
         }
     }
     /// Starts a shell using `prefix` as the prefix for each line. This function
@@ -205,6 +199,7 @@ impl Shell {
                 Ok(0)
             }
             "lspci" => {
+                use crate::device::pci::GLOBAL_PCI;
                 let scan = command.args.len() >= 2 && command.args[1].eq("-s");
                 let devs = without_interrupts(||{
                     debug!("Locking PCI Controller");

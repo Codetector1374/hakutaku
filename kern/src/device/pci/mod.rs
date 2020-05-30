@@ -1,9 +1,10 @@
-use crate::pci::device::{PCIDevice};
-use crate::pci::class::{PCIDeviceClass, HeaderType};
+use self::device::PCIDevice;
+use self::class::{PCIDeviceClass, HeaderType};
 use alloc::vec::Vec;
 use alloc::alloc::handle_alloc_error;
 use spin::Mutex;
 use crate::device::ahci::{AHCI, G_AHCI};
+use crate::device::usb::G_USB;
 
 pub mod device;
 pub mod class;
@@ -133,7 +134,15 @@ impl PCIController {
                                 },
                                 _ => {}
                             }
-                        }
+                        },
+                        _ => {}
+                    }
+                },
+                PCIDeviceClass::SerialBusController(serialbus) => {
+                    match serialbus {
+                        PCISerialBusController::USBController(usb_ctlr) => {
+                            G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
+                        },
                         _ => {}
                     }
                 },

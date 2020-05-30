@@ -1,13 +1,11 @@
+use super::{PCIError, PCIDeviceInfo, PCICapability};
+use super::class::{HeaderType, PCIDeviceClass};
 use spin::Mutex;
 use x86_64::instructions::port::{PortWriteOnly, Port};
-use crate::pci::{PCIError, PCIDeviceInfo, PCICapability};
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::pci::class::{HeaderType, PCIDeviceClass};
 use x86_64::PhysAddr;
 use alloc::vec::Vec;
 use alloc::string::String;
-
-pub mod xhci;
 
 const CONFIG_ADDR: u16 = 0x0CF8;
 const CONFIG_DATA: u16 = 0x0CFC;

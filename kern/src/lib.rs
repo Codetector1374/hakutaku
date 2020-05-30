@@ -31,9 +31,8 @@ use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
 use core::time::Duration;
 use crate::process::scheduler::GlobalScheduler;
 use crate::process::process::Process;
-use crate::pci::device::xhci::XHCI;
 use kernel_api::syscall::sleep;
-use crate::pci::GLOBAL_PCI;
+use crate::device::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
 use x86_64::registers::control::Cr0Flags;
 use alloc::string::String;
@@ -67,7 +66,6 @@ pub mod device;
 pub mod interrupts;
 pub mod gdt;
 pub mod memory;
-pub mod pci;
 pub mod shell;
 pub mod logger;
 pub mod process;
@@ -209,15 +207,18 @@ pub extern fn kernel_initialization_process() {
 pub extern fn usb_process() -> ! {
     use crate::device::usb::G_USB;
 
+    while G_USB.xhci.lock().is_none() {
+        sleep(Duration::from_millis(1)).expect("");
+    }
+
     without_interrupts(|| {
-        G_USB.initialize();
         G_USB.xhci.lock().as_mut().expect("").send_nop();
     });
 
     loop {
-        // without_interrupts(||{
-        //     G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
-        // });
+        without_interrupts(||{
+            G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
+        });
         sleep(Duration::from_millis(100)).unwrap();
     }
 }

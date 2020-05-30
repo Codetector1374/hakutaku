@@ -1,10 +1,8 @@
 use crate::PAGE_TABLE;
-use crate::pci::device::PCIDevice;
-use crate::pci::class::*;
 use x86_64::{PhysAddr, VirtAddr};
 use x86_64::instructions::interrupts::without_interrupts;
 use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
-use crate::pci::class::PCIClassMassStroageSATA::AHCI;
+use crate::device::pci::class::PCIClassMassStroageSATA::AHCI;
 use x86_64::structures::paging::{Mapper, Size4KiB, Page, PhysFrame, PageTableFlags, MapperAllSizes};
 use volatile::{ReadOnly, Volatile, WriteOnly};
 use kernel_api::syscall::sleep;
@@ -21,6 +19,8 @@ use alloc::sync::Arc;
 use pc_keyboard::KeyCode::Mute;
 use core::ops::{Deref, DerefMut};
 use core::borrow::BorrowMut;
+use crate::device::pci::device::PCIDevice;
+use crate::device::pci::class::{PCIClassMassStorage, PCIClassMassStroageSATA, PCIDeviceClass};
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -299,9 +299,9 @@ impl AHCIController {
         let tmp = regs.generic_control.GHC.read();
         regs.generic_control.GHC.write(tmp | GHC_InterruptEnable);
 
-        let word = self.dev.read_config_word(crate::pci::consts::CONF_COMMAND_OFFSET);
-        self.dev.write_config_word(crate::pci::consts::CONF_COMMAND_OFFSET,
-                                   word | crate::pci::consts::PCI_COMMAND_MASTER);
+        let word = self.dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
+        self.dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET,
+                                   word | crate::device::pci::consts::PCI_COMMAND_MASTER);
 
         self.start_ports();
     }

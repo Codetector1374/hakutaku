@@ -1,8 +1,8 @@
-use crate::pci::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController, BridgeDevice};
-use crate::pci::class::PCISerialBusController::{FireWire, ACCESSBus, SSA, USBController, FibreChannel};
-use crate::pci::class::PCISerialBusUSB::{UHCI, OHCI, EHCI, XHCI, Device};
+use super::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController, BridgeDevice};
+use super::class::PCISerialBusController::{FireWire, ACCESSBus, SSA, USBController, FibreChannel};
+use super::class::PCISerialBusUSB::{UHCI, OHCI, EHCI, XHCI, Device};
+use super::class::HeaderType::*;
 use cpuio::UnsafePort;
-use crate::pci::class::HeaderType::{RegularDevice, PCIBridge, OtherHeaderType};
 
 
 #[derive(Debug, Clone, Copy)]

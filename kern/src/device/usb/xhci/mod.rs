@@ -1,4 +1,4 @@
-use crate::pci::device::PCIDevice;
+use crate::device::pci::device::PCIDevice;
 use x86_64::{PhysAddr, VirtAddr};
 use volatile::{Volatile, ReadOnly};
 use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
@@ -6,22 +6,20 @@ use crate::PAGE_TABLE;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::paging::{Mapper, Page, Size4KiB, PhysFrame, PageTableFlags, MapperAllSizes};
 use crate::memory::frame_allocator::FrameAllocWrapper;
-use core::ops::Add;
-use crate::pci::device::xhci::extended_capability::{ExtendedCapabilityTags, ExtendedCapabilityTag};
 use alloc::boxed::Box;
-use crate::pci::device::xhci::datastructure::{DeviceContextBaseAddressArray, CommandRingSegment, EventRingSegment, EventRingSegmentTable, NormalTRB};
 use core::fmt::{Debug, Formatter};
 use alloc::vec::Vec;
-use crate::pci::device::xhci::port::{XHCIPortGroup, XHCIPort, XHCIPortStatus, XHCIPortOperationalRegisters};
 use spin::Mutex;
-use crate::pci::device::xhci::port::XHCIPortStatus::{Disconnected, Active};
-use crate::pci::device::xhci::registers::{InterrupterRegisters, DoorBellRegister};
 use kernel_api::syscall::sleep;
 use core::time::Duration;
 use core::ops::{DerefMut, Deref};
-use crate::pci::PCIController;
-use crate::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
 use crate::interrupts::InterruptIndex;
+use self::port::*;
+use self::datastructure::*;
+use self::registers::*;
+use crate::device::pci::PCIController;
+use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
+use crate::device::usb::xhci::extended_capability::*;
 
 pub mod extended_capability;
 pub mod port;
@@ -100,6 +98,11 @@ impl XHCIOperationalRegisters {
 impl From<PCIDevice> for XHCI {
     /// The caller is to ensure the passed in device is a XHCI device
     fn from(mut dev: PCIDevice) -> Self {
+        // Enable Bus Master
+        let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
+        tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;
+        dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET, tmp);
+
         // Setup Interrupt Lines
         let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
         dev.write_config_dword_dep(0xF, interrupt_number | 0x1 << 8);
@@ -157,37 +160,22 @@ pub enum XHCIError {
 }
 
 impl XHCI {
-    pub fn create_from_bus(c: impl Deref<Target=PCIController>) -> Option<XHCI> {
-        let bus = c.enumerate_pci_bus();
-        for dev in bus {
-            match dev.info.class.clone() {
-                PCIDeviceClass::SerialBusController(c) => {
-                    match &c {
-                        PCISerialBusController::USBController(usb) => {
-                            match usb {
-                                PCISerialBusUSB::XHCI => {
-                                    trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
-                                           dev.bus,
-                                           dev.device_number,
-                                           dev.func,
-                                           dev.info.header_type,
-                                           dev.info.class,
-                                    );
-                                    let mut newxhci = XHCI::from(dev);
-                                    debug!("[XHCI] Claiming Ownership...");
-                                    let result = newxhci.transfer_ownership();
-                                    debug!("[XHCI] Ownership Result: {:?}", result);
-                                    newxhci.setup_controller();
-                                    return Some(newxhci);
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
+    pub fn create_from_device(dev: PCIDevice) -> Option<XHCI> {
+        if let PCIDeviceClass::SerialBusController(PCISerialBusController::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
+            trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
+                   dev.bus,
+                   dev.device_number,
+                   dev.func,
+                   dev.info.header_type,
+                   dev.info.class,
+            );
+            let mut newxhci = XHCI::from(dev);
+            debug!("[XHCI] Claiming Ownership...");
+            let result = newxhci.transfer_ownership();
+            debug!("[XHCI] Ownership Result: {:?}", result);
+            newxhci.setup_controller();
+            return Some(newxhci);
+
         }
         debug!("[XHCI] No XHCI Controller Found");
         None
@@ -301,6 +289,7 @@ impl XHCI {
         let poll_port = |p: &mut XHCIPort| {
             let port_op = self.operational_regs.get_port_operational_register(p.port_id);
             let connected = port_op.portsc.read() & 0x1 == 1;
+            use XHCIPortStatus::*;
             match p.status {
                 XHCIPortStatus::Disconnected => {
                     if connected {

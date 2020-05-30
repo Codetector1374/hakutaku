@@ -48,8 +48,7 @@ pub struct XHCIInfo {
     /// since the port number starts from 1
     max_port: u8,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
-    usb_cr: Option<Box<XHCIRingSegment>>,
-    command_ring_enqueue_ptr: usize,
+    command_ring: Option<XHCIRing>,
     event_ring: Option<Box<XHCIRingSegment>>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
 }
@@ -165,7 +164,6 @@ impl XHCI {
                 info: Default::default(),
                 ports: Mutex::new(Default::default()),
             };
-            controller.transfer_ownership().expect("ownership");
             controller.internal_initialize().expect("");
             // controller.setup_controller();
             // return Some(controller);
@@ -196,21 +194,26 @@ impl XHCI {
     }
 
     fn internal_initialize(&mut self) -> Result<(), ()> {
-        // Step0 RESET
+        // Step 0: Transfer Ownership
+        self.transfer_ownership().expect("ownership");
+        // Step 1: RESET
         self.reset()?;
 
-        // Step1 Populate info from HCSParams1
+        // Step 2: Populate info from HCSParams1
         let hcsparams1 = self.capability_regs.hcs_params[0].read();
         self.info.max_port = (hcsparams1 & CAP_HCCPARAMS1_MAX_PORT_MASK >> CAP_HCCPARAMS1_MAX_PORT_SHIFT) as u8;
         self.info.max_slot = (hcsparams1 & CAP_HCCPARAMS1_SLOTS_MASK) as u8;
 
-        // Step2: Setup opRegs->config
+        // Step 3: Setup opRegs->config
         let mut tmp = self.operational_regs.config.read();
         tmp = (tmp & (!CAP_HCCPARAMS1_SLOTS_MASK)) | (self.info.max_slot as u32);
         self.operational_regs.config.write(tmp);
+        debug!("[XHCI] OR->config <= {} slots", self.info.max_slot);
+        debug!("[XHCI] nmbrPorts = {}", self.info.max_port);
 
-        // Step 3: Initialize Memory Structures
+        // Step 4: Initialize Memory Structures
         self.initialize_memory_structures()?;
+
 
         // Populate Slots
         // for t in self.extended_capability() {
@@ -264,10 +267,36 @@ impl XHCI {
         } else {
             panic!("[XHCI] dcbaa already setup");
         }
-        trace!("[XHCI] DCBAA Setup");
+        trace!("[XHCI] DCBAA Setup complete");
+
         // Setup Command Ring
+        if self.info.command_ring.is_none() {
+            self.info.command_ring = Some(XHCIRing::new_with_capacity(1, true));
+            let crcr_va = VirtAddr::from_ptr(
+                self.info.command_ring.as_ref().expect("thing").segments[0].as_ref() as *const XHCIRingSegment);
+            let crcr_pa = without_interrupts(|| {
+                PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
+            });
+            debug!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
+            let tmp = self.operational_regs.command_ring_control.read();
+            if tmp & OP_CRCR_CRR_MASK == 0 {
+                let cyc_state = self.info.command_ring.as_ref().expect("").cycle_state as u64;
+                assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
+                let val64 = (tmp & OP_CRCR_RES_MASK) |
+                    (crcr_pa.as_u64() & OP_CRCR_CRPTR_MASK) |
+                    (cyc_state & OP_CRCR_CS_MASK);
+                self.operational_regs.command_ring_control.write(val64);
+            } else {
+                panic!("[XHCI] CrCr is Running");
+            }
+        } else {
+            panic!("[XHCI] CrCr already setup");
+        }
+        trace!("[XHCI] CRCR Setup complete");
 
 
+        // Zero device notification
+        self.operational_regs.dnctlr.write(0x0);
         Ok(())
     }
 
@@ -399,11 +428,7 @@ impl XHCI {
     }
 
     pub fn setup_controller(&mut self) {
-        self.operational_regs.config.write(self.info.max_slot as u32);
-        debug!("[XHCI] Setup USB Config with {} slots", self.info.max_slot);
 
-        // Hardcode value: Only N1 is valid. Refer to xhci manual 5.4.4
-        self.operational_regs.dnctlr.write(0x2);
 
         // Setup Event Ring & Table
         self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
@@ -432,25 +457,6 @@ impl XHCI {
         int_regs.flags.write(0x1 << 1); // Enable Interrupt
 
 
-        // Setup Ctrl Ring Ctrl Register
-        trace!("[XHCI] CrCr setup");
-        if self.info.usb_cr.is_none() {
-            self.info.usb_cr = Some(Box::new(Default::default()));
-            let crcr_ptr = self.info.usb_cr.as_deref().expect("thing") as *const XHCIRingSegment;
-            let crcr_va = VirtAddr::new(crcr_ptr as u64);
-            let crcr_pa = without_interrupts(|| {
-                PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
-            });
-            debug!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
-            if self.operational_regs.command_ring_control.read() & 0b1000 == 0 {
-                assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
-                self.operational_regs.command_ring_control.write(crcr_pa.as_u64() | 0x1);
-            } else {
-                panic!("[XHCI] CrCr Running");
-            }
-        } else {
-            panic!("[XHCI] CrCr already setup");
-        }
 
 
         debug!("[XHCI] Starting Controller...");
@@ -463,14 +469,15 @@ impl XHCI {
     }
 
     pub fn send_nop(&mut self) {
-        let cmd_ring = self.info.usb_cr.as_mut().expect("uninitialized");
-        debug!("[XHCI] Sending NOOP on index {}", self.info.command_ring_enqueue_ptr);
-        let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
-        *target = NormalTRB::new_noop().into();
-        self.info.command_ring_enqueue_ptr += 1;
+        // let cmd_ring = self.info.command_ring.as_mut().expect("uninitialized");
+        // debug!("[XHCI] Sending NOOP on index {}", self.info.command_ring_enqueue_ptr);
+        // let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
+        // *target = NormalTRB::new_noop().into();
+        // self.info.command_ring_enqueue_ptr += 1;
         // let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
         // *target = NormalTRB::end_queue().into();
-        self.get_doorbell_regster(0).reg.write(0);
+        // self.get_doorbell_regster(0).reg.write(0);
+        unimplemented!();
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

@@ -17,12 +17,15 @@ use crate::interrupts::InterruptIndex;
 use self::port::*;
 use self::datastructure::*;
 use self::registers::*;
+use self::consts::*;
 use crate::device::pci::PCIController;
 use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
 use crate::device::usb::xhci::extended_capability::*;
+use crate::hardware::pit::PIT;
 
 pub mod extended_capability;
 pub mod port;
+pub mod consts;
 mod datastructure;
 pub mod registers;
 
@@ -41,14 +44,13 @@ pub struct XHCI {
 #[derive(Default)]
 pub struct XHCIInfo {
     max_slot: u8,
-    max_interrupt: u16,
     /// This field also double as the num of ports,
     /// since the port number starts from 1
     max_port: u8,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
-    usb_cr: Option<Box<CommandRingSegment>>,
+    usb_cr: Option<Box<XHCIRingSegment>>,
     command_ring_enqueue_ptr: usize,
-    event_ring: Option<Box<EventRingSegment>>,
+    event_ring: Option<Box<XHCIRingSegment>>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
 }
 
@@ -95,63 +97,11 @@ impl XHCIOperationalRegisters {
     }
 }
 
-impl From<PCIDevice> for XHCI {
-    /// The caller is to ensure the passed in device is a XHCI device
-    fn from(mut dev: PCIDevice) -> Self {
-        // Enable Bus Master
-        let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
-        tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;
-        dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET, tmp);
-
-        // Setup Interrupt Lines
-        let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
-        dev.write_config_dword_dep(0xF, interrupt_number | 0x1 << 8);
-        let interrupt = dev.read_config_dword_dep(0xF);
-        let int_line = (interrupt >> 8) as u8;
-        let int_num = interrupt as u8;
-        debug!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
-        // Bar0
-        let size = dev.address_space_size();
-        let base = dev.base_mmio_address(0).expect("xHCI is MMIO");
-        let base_offset = base.as_u64() as usize & (4096 - 1);
-        let alloc_base = base.align_down(4096u64);
-        trace!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
-        let va_root = without_interrupts(|| {
-            let (va, size) = GMMIO_ALLOC.lock().allocate(size);
-            trace!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
-            let mut fallocw = FrameAllocWrapper {};
-            for offset in (0..size).step_by(4096) {
-                let paddr = alloc_base + offset;
-                let vaddr = va + offset;
-                trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
-                unsafe {
-                    PAGE_TABLE.write().map_to(
-                        Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
-                        PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
-                        PageTableFlags::WRITABLE | PageTableFlags::WRITE_THROUGH | PageTableFlags::PRESENT,
-                        &mut fallocw,
-                    ).expect("Unable to map").flush();
-                }
-            }
-            va
-        });
-        let mmio_vbase = va_root + base_offset;
-        let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
-        debug!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
-        let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
-        let op_regs = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
-        XHCI {
-            pci_device: dev,
-            mmio_base: base,
-            mmio_virt_base: mmio_vbase,
-            mmio_size: size,
-            capability_regs: cap_regs,
-            operational_regs: op_regs,
-            info: Default::default(),
-            ports: Mutex::new(Default::default()),
-        }.internal_initialize()
-    }
-}
+// impl From<PCIDevice> for XHCI {
+//     / The caller is to ensure the passed in device is a XHCI device
+// fn from(mut dev: PCIDevice) -> Self {
+// }
+// }
 
 #[derive(Debug)]
 pub enum XHCIError {
@@ -160,25 +110,77 @@ pub enum XHCIError {
 }
 
 impl XHCI {
-    pub fn create_from_device(dev: PCIDevice) -> Option<XHCI> {
+    pub fn create_from_device(mut dev: PCIDevice) -> Option<XHCI> {
         if let PCIDeviceClass::SerialBusController(PCISerialBusController::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
-            trace!("[XHCI] {:04X}:{:02X}.{:X} :({:?}): -> {:X?}",
-                   dev.bus,
-                   dev.device_number,
-                   dev.func,
-                   dev.info.header_type,
-                   dev.info.class,
-            );
-            let mut newxhci = XHCI::from(dev);
-            debug!("[XHCI] Claiming Ownership...");
-            let result = newxhci.transfer_ownership();
-            debug!("[XHCI] Ownership Result: {:?}", result);
-            newxhci.setup_controller();
-            return Some(newxhci);
+            // Step1: Enable Bus Master
+            let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
+            tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;
+            dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET, tmp);
 
+            // Step2: Setup Interrupt Lines
+            let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
+            dev.write_config_dword_dep(0xF, interrupt_number | 0x1 << 8);
+            let interrupt = dev.read_config_dword_dep(0xF);
+            let int_line = (interrupt >> 8) as u8;
+            let int_num = interrupt as u8;
+            debug!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
+
+            // Step3: Setup MMIO Registers
+            let size = Self::xhci_address_space_detect(&mut dev);
+            let base = dev.base_mmio_address(0).expect("xHCI can't be MMIO");
+            let base_offset = base.as_u64() as usize & (4096 - 1);
+            let alloc_base = base.align_down(4096u64);
+            trace!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
+            let va_root = without_interrupts(|| {
+                let (va, size) = GMMIO_ALLOC.lock().allocate(size + base_offset);
+                trace!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
+                let mut fallocw = FrameAllocWrapper {};
+                for offset in (0..size).step_by(4096) {
+                    let paddr = alloc_base + offset;
+                    let vaddr = va + offset;
+                    trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
+                    unsafe {
+                        PAGE_TABLE.write().map_to(
+                            Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),
+                            PhysFrame::<Size4KiB>::from_start_address(paddr).expect("Unaligned PA"),
+                            PageTableFlags::WRITABLE | PageTableFlags::WRITE_THROUGH | PageTableFlags::PRESENT,
+                            &mut fallocw,
+                        ).expect("Unable to map").flush();
+                    }
+                }
+                va
+            });
+            let mmio_vbase = va_root + base_offset;
+            let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
+            debug!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
+            let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
+            let op_regs = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
+            let mut controller = XHCI {
+                pci_device: dev,
+                mmio_base: base,
+                mmio_virt_base: mmio_vbase,
+                mmio_size: size,
+                capability_regs: cap_regs,
+                operational_regs: op_regs,
+                info: Default::default(),
+                ports: Mutex::new(Default::default()),
+            };
+            controller.transfer_ownership().expect("ownership");
+            controller.internal_initialize().expect("");
+            // controller.setup_controller();
+            // return Some(controller);
+            return None;
         }
         debug!("[XHCI] No XHCI Controller Found");
         None
+    }
+
+    fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
+        let old_value = dev.read_config_bar_register(0);
+        dev.write_config_bar_register(0, 0xFFFF_FFFF);
+        let new_val = dev.read_config_bar_register(0);
+        dev.write_config_bar_register(0, old_value);
+        (!new_val) as usize
     }
 
     fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
@@ -193,52 +195,80 @@ impl XHCI {
         unsafe { &mut *((base_ptr + doorbell_offset + (offset as u64 * 4)) as *mut DoorBellRegister) }
     }
 
+    fn internal_initialize(&mut self) -> Result<(), ()> {
+        // Step0 RESET
+        self.reset()?;
 
-    fn internal_initialize(mut self) -> Self {
-        // Populate info from HCSParams1
+        // Step1 Populate info from HCSParams1
         let hcsparams1 = self.capability_regs.hcs_params[0].read();
-        self.info.max_port = (hcsparams1 >> 24) as u8;
-        self.info.max_interrupt = (hcsparams1 >> 8) as u16;
-        self.info.max_slot = hcsparams1 as u8;
+        self.info.max_port = (hcsparams1 & CAP_HCCPARAMS1_MAX_PORT_MASK >> CAP_HCCPARAMS1_MAX_PORT_SHIFT) as u8;
+        self.info.max_slot = (hcsparams1 & CAP_HCCPARAMS1_SLOTS_MASK) as u8;
+
+        // Step2: Setup opRegs->config
+        let mut tmp = self.operational_regs.config.read();
+        tmp = (tmp & (!CAP_HCCPARAMS1_SLOTS_MASK)) | (self.info.max_slot as u32);
+        self.operational_regs.config.write(tmp);
+
+        // Step 3: Initialize Memory Structures
+        self.initialize_memory_structures()?;
 
         // Populate Slots
+        // for t in self.extended_capability() {
+        //     match t {
+        //         ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
+        //             let mut ports = self.ports.lock();
+        //             for port in 0..port_count {
+        //                 let usbport = XHCIPort::new(port + port_offset);
+        //                 if major == 3 {
+        //                     if ports.len() > port as usize {
+        //                         let pg = ports.get_mut(port as usize).expect("has portgroup");
+        //                         assert!(pg.usb3_port.is_none());
+        //                         pg.usb3_port = Some(usbport);
+        //                     } else {
+        //                         assert_eq!(ports.len(), port as usize);
+        //                         let mut pg = XHCIPortGroup::default();
+        //                         pg.usb3_port = Some(usbport);
+        //                         ports.push(pg);
+        //                     }
+        //                 } else {
+        //                     if ports.len() > port as usize {
+        //                         let pg = ports.get_mut(port as usize).expect("has portgroup");
+        //                         assert!(pg.usb2_port.is_none());
+        //                         pg.usb2_port = Some(usbport);
+        //                     } else {
+        //                         assert_eq!(ports.len(), port as usize);
+        //                         let mut pg = XHCIPortGroup::default();
+        //                         pg.usb2_port = Some(usbport);
+        //                         ports.push(pg);
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //         _ => {}
+        //     }
+        // }
+        Ok(())
+    }
 
-        for t in self.extended_capability() {
-            match t {
-                ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
-                    let mut ports = self.ports.lock();
-                    for port in 0..port_count {
-                        let usbport = XHCIPort::new(port + port_offset);
-                        if major == 3 {
-                            if ports.len() > port as usize {
-                                let pg = ports.get_mut(port as usize).expect("has portgroup");
-                                assert!(pg.usb3_port.is_none());
-                                pg.usb3_port = Some(usbport);
-                            } else {
-                                assert_eq!(ports.len(), port as usize);
-                                let mut pg = XHCIPortGroup::default();
-                                pg.usb3_port = Some(usbport);
-                                ports.push(pg);
-                            }
-                        } else {
-                            if ports.len() > port as usize {
-                                let pg = ports.get_mut(port as usize).expect("has portgroup");
-                                assert!(pg.usb2_port.is_none());
-                                pg.usb2_port = Some(usbport);
-                            } else {
-                                assert_eq!(ports.len(), port as usize);
-                                let mut pg = XHCIPortGroup::default();
-                                pg.usb2_port = Some(usbport);
-                                ports.push(pg);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+    fn initialize_memory_structures(&mut self) -> Result<(), ()> {
+        // Step 1: Setup Device Context Base Address Array
+        if self.info.device_context_baa.is_none() {
+            self.info.device_context_baa = Some(Box::new(Default::default()));
+            let dcbaa_ptr = self.info.device_context_baa.as_deref_mut().expect("has thing") as *const DeviceContextBaseAddressArray;
+            let dcbaa_va = VirtAddr::new(dcbaa_ptr as u64);
+            let dcbaa_pa = without_interrupts(|| {
+                PAGE_TABLE.read().translate_addr(dcbaa_va).expect("Mapped")
+            });
+            assert!(dcbaa_pa.is_aligned(2048u64), "DCBAA Alignment");
+            self.operational_regs.device_context_base_addr_array_ptr.write(dcbaa_pa.as_u64());
+        } else {
+            panic!("[XHCI] dcbaa already setup");
         }
+        trace!("[XHCI] DCBAA Setup");
+        // Setup Command Ring
 
-        self
+
+        Ok(())
     }
 
     pub fn hcc_flags(&mut self) -> u32 {
@@ -320,50 +350,55 @@ impl XHCI {
         }
     }
 
-    pub fn stop(&mut self) {
-        debug!("[XHCI] Stopping XHCI Controller");
-        let old_value = self.operational_regs.command.read();
-        self.operational_regs.command.write(old_value & !0x1u32);
-        sleep(Duration::from_millis(25)).unwrap();
-        let status = self.operational_regs.status.read();
-        let cmd = self.operational_regs.command.read();
-        // Not Running & halted
-        if cmd & 0x1 != 0 || status & 0x1 != 1 {
-            panic!("[XHCI] Failed to stop controller");
+    pub fn halt_controller(&mut self) -> Result<(), ()> {
+        if self.operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
+            debug!("[XHCI] Halting Controller");
+            let mut tmp = self.operational_regs.command.read();
+            tmp &= !OP_CMD_RUN_STOP_MASK;
+            self.operational_regs.command.write(tmp);
+
+            let wait_target = PIT::current_time() + HALT_TIMEOUT;
+            loop {
+                if self.operational_regs.status.read() & OP_STS_HLT_MASK == 1 {
+                    break;
+                }
+                if PIT::current_time() > wait_target {
+                    error!("[XHCI] Timedout while halting controller on bus: {}",
+                           self.pci_device.bus_location_str());
+                    return Err(());
+                }
+                sleep(Duration::from_millis(1)).expect("slept");
+            };
         }
+        Ok(())
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self) -> Result<(), ()>{
         debug!("[XHCI] Resetting Controller!");
-        self.operational_regs.command.write(1 << 1); // Reset
-        let mut cntr = 0;
+        // Step 1: Halt if needs to
+        self.halt_controller()?;
+
+        let mut tmp = self.operational_regs.command.read();
+        tmp |= OP_CMD_RESET_MASK;
+        self.operational_regs.command.write(tmp);
+
+        let wait_target = PIT::current_time() + RESET_TIMEOUT;
         loop {
-            if (self.operational_regs.command.read() >> 1) & 0x1 == 0 && // Reseting
-                (self.operational_regs.status.read() >> 11) & 0x1 == 0 { // Not Ready
+            if (self.operational_regs.command.read() & OP_CMD_RESET_MASK == 0) &&
+                (self.operational_regs.status.read() & OP_STS_CNR_MASK == 0) {
                 break;
             }
-            sleep(Duration::from_millis(10)).unwrap();
-            cntr += 1;
-            if cntr > 20 {
-                panic!("[XHCI] Controller Failed to Reset")
+            if PIT::current_time() > wait_target {
+                error!("[XHCI] Timedout while resetting controller on bus: {}",
+                       self.pci_device.bus_location_str());
+                return Err(());
             }
+            sleep(Duration::from_millis(1)).expect("slept");
         }
-        let cmd = self.operational_regs.command.read();
-        let sts = self.operational_regs.status.read();
-        debug!("[XHCI] Controller Reset! cmd: 0x{:x}, stats: 0x{:x}", cmd, sts);
+        Ok(())
     }
 
     pub fn setup_controller(&mut self) {
-        let controller_running = self.operational_regs.command.read() & 0x1 == 1;
-        debug!("[XHCI] Controller Running: {}", controller_running);
-        // Stop if running
-        if controller_running {
-            self.stop();
-        }
-
-        // Reset Controller
-        self.reset();
-
         self.operational_regs.config.write(self.info.max_slot as u32);
         debug!("[XHCI] Setup USB Config with {} slots", self.info.max_slot);
 
@@ -372,19 +407,19 @@ impl XHCI {
 
         // Setup Event Ring & Table
         self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
-        self.info.event_ring = Some(Box::new(EventRingSegment::default()));
+        self.info.event_ring = Some(Box::new(XHCIRingSegment::default()));
         // Event Ring Table: Setup the first entry
-        let dequeue_va = self.info.event_ring.as_deref().unwrap() as *const EventRingSegment as u64;
+        let dequeue_va = self.info.event_ring.as_deref().unwrap() as *const XHCIRingSegment as u64;
         let dequeue_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(VirtAddr::new(dequeue_va)).expect("has mapping")
-        }).as_u64();
+        });
         self.info.event_ring_table.as_mut().expect("table").segments[0].addr = dequeue_pa;
         self.info.event_ring_table.as_mut().expect("table").segments[0].segment_size = 256;
 
         // Interrupt Registers
         let int_regs = self.get_runtime_interrupt_register(0);
         // Load Event Ring Dequeue Pointer Register
-        int_regs.event_ring_deque_ptr.write(dequeue_pa | 0b1000);
+        int_regs.event_ring_deque_ptr.write(dequeue_pa.as_u64() | 0b1000);
 
         // Load Table
         int_regs.event_ring_table_size.write(1); // Set Table Size
@@ -393,33 +428,15 @@ impl XHCI {
         let erst_pa = without_interrupts(|| {
             PAGE_TABLE.read().translate_addr(erst_va).expect("mapped")
         });
-        int_regs.event_ring_seg_table_ptr.write(erst_pa.as_u64());
+        int_regs.event_ring_seg_table_ptr.write(erst_pa);
         int_regs.flags.write(0x1 << 1); // Enable Interrupt
 
-        // Setup Device Context Base Address Array
-        if self.info.device_context_baa.is_none() {
-            self.info.device_context_baa = Some(Box::new(Default::default()));
-            let dcbaa_ptr = self.info.device_context_baa.as_deref_mut().expect("has thing") as *const DeviceContextBaseAddressArray;
-            let dcbaa_va = VirtAddr::new(dcbaa_ptr as u64);
-            let dcbaa_pa = without_interrupts(|| {
-                PAGE_TABLE.read().translate_addr(dcbaa_va).expect("Mapped")
-            });
-            // DeviceContextBaseAddrArray
-            trace!("[XHCI] dcbaaPA: {:?}", dcbaa_pa);
-            if dcbaa_pa.as_u64() & 0b11_1111 != 0 {
-                panic!("Alignment issue");
-            }
-            self.operational_regs.device_context_base_addr_array_ptr.write(dcbaa_pa.as_u64());
-        } else {
-            panic!("[XHCI] dcbaa already setup");
-        }
-        trace!("[XHCI] dcbaa done");
 
         // Setup Ctrl Ring Ctrl Register
         trace!("[XHCI] CrCr setup");
         if self.info.usb_cr.is_none() {
             self.info.usb_cr = Some(Box::new(Default::default()));
-            let crcr_ptr = self.info.usb_cr.as_deref().expect("thing") as *const CommandRingSegment;
+            let crcr_ptr = self.info.usb_cr.as_deref().expect("thing") as *const XHCIRingSegment;
             let crcr_va = VirtAddr::new(crcr_ptr as u64);
             let crcr_pa = without_interrupts(|| {
                 PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
@@ -476,8 +493,11 @@ impl XHCI {
         match tags {
             Some(t) => {
                 if let ExtendedCapabilityTag::USBLegacySupport { head, bios_own, os_own } = t {
-                    if !bios_own || os_own {
+                    if os_own && bios_own {
                         return Err(XHCIError::UnexpectedOwnership);
+                    }
+                    if os_own {
+                        return Ok(());
                     }
                     let write_ptr = (head as *mut u8).wrapping_offset(3);
                     let read_ptr = (head as *const u8).wrapping_offset(2);
@@ -489,7 +509,7 @@ impl XHCI {
                 }
                 panic!("wrong tag type found");
             }
-            _ => Err(XHCIError::NoLegacyTag)
+            _ => Ok(())
         }
     }
 }

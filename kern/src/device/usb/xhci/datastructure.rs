@@ -1,4 +1,5 @@
 use core::fmt::{Debug, Formatter};
+use x86_64::PhysAddr;
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
@@ -15,17 +16,28 @@ impl Default for DeviceContextBaseAddressArray {
 }
 
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct EventRingSegmentEntry {
-    pub addr: u64,
+    pub addr: PhysAddr,
     pub segment_size: u16,
     _res0: u16,
     _res1: u32,
 }
 const_assert_size!(EventRingSegmentEntry, 16);
 
+impl Default for EventRingSegmentEntry {
+    fn default() -> Self {
+        Self {
+            addr: PhysAddr::new(0),
+            segment_size: 0,
+            _res0: 0,
+            _res1: 0
+        }
+    }
+}
+
 impl EventRingSegmentEntry {
-    pub fn new(ptr: u64, size: u16) -> EventRingSegmentEntry {
+    pub fn new(ptr: PhysAddr, size: u16) -> EventRingSegmentEntry {
         EventRingSegmentEntry {
             addr: ptr,
             segment_size: size,
@@ -49,27 +61,14 @@ impl Default for EventRingSegmentTable {
 }
 
 #[repr(C, align(4096))]
-pub struct EventRingSegment {
+pub struct XHCIRingSegment {
     pub trbs: [ControlTRB; 256],
 }
+const_assert_size!(XHCIRingSegment, 4096);
 
-impl Default for EventRingSegment {
+impl Default for XHCIRingSegment {
     fn default() -> Self {
-        EventRingSegment {
-            trbs: [Default::default(); 256],
-        }
-    }
-}
-
-#[repr(C, align(4096))]
-pub struct CommandRingSegment {
-    pub trbs: [ControlTRB; 256],
-}
-const_assert_size!(CommandRingSegment, 4096);
-
-impl Default for CommandRingSegment {
-    fn default() -> Self {
-        CommandRingSegment {
+        XHCIRingSegment {
             trbs: [Default::default(); 256],
         }
     }

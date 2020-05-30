@@ -1,4 +1,5 @@
 use volatile::{Volatile, WriteOnly};
+use x86_64::PhysAddr;
 
 #[repr(C)]
 pub struct InterrupterRegisters {
@@ -8,7 +9,7 @@ pub struct InterrupterRegisters {
     pub moderation_counter: Volatile<u16>,
     pub event_ring_table_size: Volatile<u32>,
     _res3: u32,
-    pub event_ring_seg_table_ptr: Volatile<u64>,
+    pub event_ring_seg_table_ptr: Volatile<PhysAddr>,
     ///  Busy(3) | (2:0)index
     pub event_ring_deque_ptr: Volatile<u64>,
 }

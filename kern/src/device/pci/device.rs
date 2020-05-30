@@ -10,7 +10,7 @@ use alloc::string::String;
 const CONFIG_ADDR: u16 = 0x0CF8;
 const CONFIG_DATA: u16 = 0x0CFC;
 
-const CONFIG_BAR_BASE_REG: u8 = 0x04;
+const CONFIG_BAR_BASE_REG: u8 = 0x10;
 
 const PORTS: Mutex<PCIPorts> = Mutex::new(PCIPorts::new());
 
@@ -204,19 +204,15 @@ impl PCIDevice {
     }
 
     pub fn read_config_bar_register(&self, no: u8) -> u32 {
-        self.read_config_dword_dep(CONFIG_BAR_BASE_REG + no as u8)
+        self.read_config_dword(CONFIG_BAR_BASE_REG + (no * 4) as u8)
+    }
+
+    pub fn write_config_bar_register(&mut self, no: u8, val: u32) {
+        self.write_config_dword(CONFIG_BAR_BASE_REG + (no * 4), val);
     }
 
     pub fn irq_line(&self) -> u8 {
         self.read_config_dword_dep(0xF) as u8
-    }
-
-    pub fn address_space_size(&mut self) -> usize {
-        let old_value = self.read_config_bar_register(0);
-        self.write_config_dword_dep(CONFIG_BAR_BASE_REG, 0xFFFF_FFFF);
-        let new_val = self.read_config_bar_register(0);
-        self.write_config_dword_dep(CONFIG_BAR_BASE_REG, old_value);
-        (!new_val) as usize
     }
 
     /// This function returns a quad of Class, SubClass, Prog IF, Revision ID

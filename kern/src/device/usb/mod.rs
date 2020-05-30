@@ -21,8 +21,8 @@ impl USBSystem {
     pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
-                let dev = XHCI::create_from_device(dev).expect("created");
-                self.xhci.lock().replace(dev);
+                let dev = XHCI::create_from_device(dev);
+                // self.xhci.lock().replace(dev);
             },
             _ => {
                 debug!("[USB] Unknown USB Host Type at {}: {:?}",

@@ -1,27 +1,30 @@
-use crate::device::pci::device::PCIDevice;
-use x86_64::{PhysAddr, VirtAddr};
-use volatile::{Volatile, ReadOnly};
-use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
-use crate::PAGE_TABLE;
-use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::structures::paging::{Mapper, Page, Size4KiB, PhysFrame, PageTableFlags, MapperAllSizes};
-use crate::memory::frame_allocator::FrameAllocWrapper;
 use alloc::boxed::Box;
-use core::fmt::{Debug, Formatter};
 use alloc::vec::Vec;
-use spin::Mutex;
-use kernel_api::syscall::sleep;
+use core::fmt::{Debug, Formatter};
+use core::ops::{Deref, DerefMut};
 use core::time::Duration;
-use core::ops::{DerefMut, Deref};
-use crate::interrupts::InterruptIndex;
-use self::port::*;
-use self::datastructure::*;
-use self::registers::*;
-use self::consts::*;
-use crate::device::pci::PCIController;
+
+use kernel_api::syscall::sleep;
+use spin::Mutex;
+use volatile::{ReadOnly, Volatile};
+use x86_64::{PhysAddr, VirtAddr};
+use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::structures::paging::{Mapper, MapperAllSizes, Page, PageTableFlags, PhysFrame, Size4KiB};
+
 use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
+use crate::device::pci::device::PCIDevice;
+use crate::device::pci::PCIController;
 use crate::device::usb::xhci::extended_capability::*;
 use crate::hardware::pit::PIT;
+use crate::interrupts::InterruptIndex;
+use crate::memory::frame_allocator::FrameAllocWrapper;
+use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
+use crate::PAGE_TABLE;
+
+use self::consts::*;
+use self::datastructure::*;
+use self::port::*;
+use self::registers::*;
 
 pub mod extended_capability;
 pub mod port;
@@ -37,6 +40,8 @@ pub struct XHCI {
     mmio_size: usize,
     capability_regs: &'static mut XHCICapabilityRegisters,
     operational_regs: &'static mut XHCIOperationalRegisters,
+    doorbell_offset: u32,
+    runtime_offset: u32,
     info: XHCIInfo,
     ports: Mutex<Vec<XHCIPortGroup>>,
 }
@@ -49,7 +54,7 @@ pub struct XHCIInfo {
     max_port: u8,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     command_ring: Option<XHCIRing>,
-    event_ring: Option<Box<XHCIRingSegment>>,
+    event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
 }
 
@@ -153,21 +158,24 @@ impl XHCI {
             let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
             debug!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
             let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
-            let op_regs = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
+            let op_regs  = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
+            let doorbell_offset = cap_regs.doorbell_offset.read() & CAP_DBOFFSET_MASK;
+            let runtime_offset = cap_regs.rts_offset.read() & CAP_RTSOFFSET_MASK;
             let mut controller = XHCI {
                 pci_device: dev,
                 mmio_base: base,
                 mmio_virt_base: mmio_vbase,
                 mmio_size: size,
+                doorbell_offset,
+                runtime_offset,
                 capability_regs: cap_regs,
                 operational_regs: op_regs,
                 info: Default::default(),
                 ports: Mutex::new(Default::default()),
             };
             controller.internal_initialize().expect("");
-            // controller.setup_controller();
-            // return Some(controller);
-            return None;
+            return Some(controller);
+            // return None;
         }
         debug!("[XHCI] No XHCI Controller Found");
         None
@@ -183,14 +191,18 @@ impl XHCI {
 
     fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
         let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
-        let runtime_offset = self.capability_regs.rts_offset.read() as u64;
-        unsafe { &mut *((base_ptr + runtime_offset + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters) }
+        unsafe {
+            &mut *((base_ptr + (self.runtime_offset as u64)
+                + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters)
+        }
     }
 
     fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
         let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
-        let doorbell_offset = self.capability_regs.doorbell_offset.read() as u64;
-        unsafe { &mut *((base_ptr + doorbell_offset + (offset as u64 * 4)) as *mut DoorBellRegister) }
+        unsafe {
+            &mut *((base_ptr + (self.doorbell_offset as u64) +
+                (offset as u64 * 4)) as *mut DoorBellRegister)
+        }
     }
 
     fn internal_initialize(&mut self) -> Result<(), ()> {
@@ -214,7 +226,15 @@ impl XHCI {
         // Step 4: Initialize Memory Structures
         self.initialize_memory_structures()?;
 
+        // Step 5: Start the Controller !
+        self.start()?;
 
+        // Clear Interrupt Ctrl / Pending
+        self.get_runtime_interrupt_register(0).irq_flags.write(INT_IRQ_FLAG_INT_PENDING_MASK | INT_IRQ_FLAG_INT_EN_MASK);
+        self.get_runtime_interrupt_register(0).irq_control.write(0);
+
+        let ver = (self.capability_regs.length_and_ver.read() & CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
+        info!("[XHCI] Controller with version {:04x}", ver);
         // Populate Slots
         // for t in self.extended_capability() {
         //     match t {
@@ -269,7 +289,7 @@ impl XHCI {
         }
         trace!("[XHCI] DCBAA Setup complete");
 
-        // Setup Command Ring
+        // Step 2: Setup Command Ring (CRCR)
         if self.info.command_ring.is_none() {
             self.info.command_ring = Some(XHCIRing::new_with_capacity(1, true));
             let crcr_va = VirtAddr::from_ptr(
@@ -281,10 +301,12 @@ impl XHCI {
             let tmp = self.operational_regs.command_ring_control.read();
             if tmp & OP_CRCR_CRR_MASK == 0 {
                 let cyc_state = self.info.command_ring.as_ref().expect("").cycle_state as u64;
+                debug!("[XHCI] CYC State: {}", cyc_state);
                 assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
                 let val64 = (tmp & OP_CRCR_RES_MASK) |
                     (crcr_pa.as_u64() & OP_CRCR_CRPTR_MASK) |
                     (cyc_state & OP_CRCR_CS_MASK);
+                debug!("[XHCI] Writing to CRCR {:#x}", val64);
                 self.operational_regs.command_ring_control.write(val64);
             } else {
                 panic!("[XHCI] CrCr is Running");
@@ -294,6 +316,51 @@ impl XHCI {
         }
         trace!("[XHCI] CRCR Setup complete");
 
+        // Setup Event Ring
+        self.info.event_ring = Some(XHCIRing::new_with_capacity(EVENT_RING_NUM_SEGMENTS, false));
+        self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
+        self.info.event_ring_table.as_mut().expect("").segment_count = EVENT_RING_NUM_SEGMENTS;
+
+        for idx in 0..EVENT_RING_NUM_SEGMENTS {
+            let ent = self.info.event_ring_table.as_mut().expect("");
+            ent.segments[idx].segment_size = TRBS_PER_SEGMENT as u32;
+            let va = VirtAddr::from_ptr(
+                self.info.event_ring.as_ref().expect("").
+                    segments[idx].deref() as *const XHCIRingSegment
+            );
+            let pa = without_interrupts(|| {
+                use crate::PAGE_TABLE;
+                PAGE_TABLE.read().translate_addr(va).expect("")
+            });
+            assert_eq!(pa.as_u64() & 0b11_1111, 0, "alignment");
+            ent.segments[idx].addr = pa;
+        }
+        // Update Interrupter 0 Dequeu Pointer
+        let dequeue_ptr_va = VirtAddr::from_ptr(
+            &self.info.event_ring.as_ref().expect("").segments[0].trbs[0] as *const TRB
+        );
+        let dequeu_ptr_pa = without_interrupts(|| {
+            use crate::PAGE_TABLE;
+            PAGE_TABLE.read().translate_addr(dequeue_ptr_va).expect("")
+        });
+        self.get_runtime_interrupt_register(0).event_ring_deque_ptr.
+            write(dequeu_ptr_pa.as_u64() & INT_ERDP_DEQUEUE_PTR_MASK);
+        // set ERST table register with correct count
+        let mut tmp = self.get_runtime_interrupt_register(0).event_ring_table_size.read();
+        tmp &= !INT_ERSTSZ_TABLE_SIZE_MASK;
+        tmp |= (EVENT_RING_NUM_SEGMENTS as u32) & INT_ERSTSZ_TABLE_SIZE_MASK;
+        self.get_runtime_interrupt_register(0).event_ring_table_size.write(tmp);
+        // Setup Event Ring Segment Table Pointer
+        let erst_va = VirtAddr::from_ptr(
+            self.info.event_ring_table.as_ref().expect("").
+                deref() as *const EventRingSegmentTable
+        );
+        let erst_pa = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(erst_va).expect("")
+        });
+        self.get_runtime_interrupt_register(0).event_ring_seg_table_ptr.write(erst_pa);
+
+        // TODO Setup Scratchpad Registers
 
         // Zero device notification
         self.operational_regs.dnctlr.write(0x0);
@@ -335,10 +402,15 @@ impl XHCI {
             self.operational_regs.status.write(0x1 << 3); // Clear Interrupt
             if self.get_runtime_interrupt_register(0).pending() {
                 let int0_rs = self.get_runtime_interrupt_register(0);
-                debug!("[XHCI] Has Pending Interrupt on Ch0 (CMDRing): 0x{:x}", int0_rs.flags.read());
-                // self.info.event_ring.unwrap().
-                int0_rs.flags.write(int0_rs.flags.read() | 0x1); // Clear Interrupt
-                let trb = unsafe { self.info.event_ring.as_ref().unwrap().trbs[0].normal };
+                debug!("[XHCI] Has Pending Interrupt on Ch0 (CMDRing): 0x{:x}", int0_rs.irq_flags.read());
+                int0_rs.irq_flags.write(int0_rs.irq_flags.read() |
+                    INT_IRQ_FLAG_INT_PENDING_MASK); // Clear Interrupt
+                let er = self.info.event_ring.as_mut().expect("");
+                let trb = er.pop(false);
+                let tmp = er.dequeue_pointer().as_u64() | INT_ERDP_BUSY_MASK |
+                    (INT_ERDP_DESI_MASK & (er.dequeue.0 as u64));
+                int0_rs.event_ring_deque_ptr.write(tmp);
+                let trb = unsafe { trb.normal };
                 debug!("[XHCI] Event: {:x?}", trb);
             }
         }
@@ -379,7 +451,7 @@ impl XHCI {
         }
     }
 
-    pub fn halt_controller(&mut self) -> Result<(), ()> {
+    pub fn halt(&mut self) -> Result<(), ()> {
         if self.operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
             debug!("[XHCI] Halting Controller");
             let mut tmp = self.operational_regs.command.read();
@@ -402,10 +474,36 @@ impl XHCI {
         Ok(())
     }
 
-    pub fn reset(&mut self) -> Result<(), ()>{
+    fn start(&mut self) -> Result<(), ()> {
+        debug!("[XHCI] Starting the controller");
+
+        let mut tmp = self.operational_regs.command.read();
+        tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_INT_EN_MASK | OP_CMD_HSERR_EN_MASK;
+        debug!("[XHCI] command reg: {:#x}", tmp);
+        self.operational_regs.command.write(tmp);
+
+        let wait_target = PIT::current_time() + HALT_TIMEOUT;
+        loop {
+            if self.operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
+                break;
+            }
+            if PIT::current_time() > wait_target {
+                error!("[XHCI] Timedout while starting controller on bus: {}",
+                       self.pci_device.bus_location_str());
+                return Err(());
+            }
+            sleep(Duration::from_millis(1)).expect("slept");
+        };
+
+        self.poll_interrupts();
+
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> Result<(), ()> {
         debug!("[XHCI] Resetting Controller!");
         // Step 1: Halt if needs to
-        self.halt_controller()?;
+        self.halt()?;
 
         let mut tmp = self.operational_regs.command.read();
         tmp |= OP_CMD_RESET_MASK;
@@ -427,57 +525,11 @@ impl XHCI {
         Ok(())
     }
 
-    pub fn setup_controller(&mut self) {
-
-
-        // Setup Event Ring & Table
-        self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
-        self.info.event_ring = Some(Box::new(XHCIRingSegment::default()));
-        // Event Ring Table: Setup the first entry
-        let dequeue_va = self.info.event_ring.as_deref().unwrap() as *const XHCIRingSegment as u64;
-        let dequeue_pa = without_interrupts(|| {
-            PAGE_TABLE.read().translate_addr(VirtAddr::new(dequeue_va)).expect("has mapping")
-        });
-        self.info.event_ring_table.as_mut().expect("table").segments[0].addr = dequeue_pa;
-        self.info.event_ring_table.as_mut().expect("table").segments[0].segment_size = 256;
-
-        // Interrupt Registers
-        let int_regs = self.get_runtime_interrupt_register(0);
-        // Load Event Ring Dequeue Pointer Register
-        int_regs.event_ring_deque_ptr.write(dequeue_pa.as_u64() | 0b1000);
-
-        // Load Table
-        int_regs.event_ring_table_size.write(1); // Set Table Size
-        // Event Ring Segment Table
-        let erst_va = VirtAddr::new(self.info.event_ring_table.as_deref().expect("lol") as *const EventRingSegmentTable as u64);
-        let erst_pa = without_interrupts(|| {
-            PAGE_TABLE.read().translate_addr(erst_va).expect("mapped")
-        });
-        int_regs.event_ring_seg_table_ptr.write(erst_pa);
-        int_regs.flags.write(0x1 << 1); // Enable Interrupt
-
-
-
-
-        debug!("[XHCI] Starting Controller...");
-        // HostErrEnable | Interrupt EN | Host Rest | Run/Stop
-        self.operational_regs.command.write(0b1101);
-        debug!("[XHCI] Controller Status: {:x}", self.operational_regs.status.read());
-
-        let cmd_ring_status = self.operational_regs.command_ring_control.read();
-        debug!("[XHCI] CRCR Value: {:x}", cmd_ring_status);
-    }
-
     pub fn send_nop(&mut self) {
-        // let cmd_ring = self.info.command_ring.as_mut().expect("uninitialized");
-        // debug!("[XHCI] Sending NOOP on index {}", self.info.command_ring_enqueue_ptr);
-        // let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
-        // *target = NormalTRB::new_noop().into();
-        // self.info.command_ring_enqueue_ptr += 1;
-        // let target = &mut cmd_ring.trbs[self.info.command_ring_enqueue_ptr];
-        // *target = NormalTRB::end_queue().into();
-        // self.get_doorbell_regster(0).reg.write(0);
-        unimplemented!();
+        let cmd_ring = self.info.command_ring.as_mut().expect("uninitialized");
+        debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
+        cmd_ring.push(NormalTRB::new_noop().into());
+        self.get_doorbell_regster(0).reg.write(0);
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

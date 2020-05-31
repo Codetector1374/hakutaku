@@ -4,9 +4,8 @@ use x86_64::PhysAddr;
 #[repr(C)]
 pub struct InterrupterRegisters {
     /// Interrupt Enable | Int Pending
-    pub flags: Volatile<u32>,
-    pub moderation_interval: Volatile<u16>,
-    pub moderation_counter: Volatile<u16>,
+    pub irq_flags: Volatile<u32>,
+    pub irq_control: Volatile<u32>,
     pub event_ring_table_size: Volatile<u32>,
     _res3: u32,
     pub event_ring_seg_table_ptr: Volatile<PhysAddr>,
@@ -16,7 +15,7 @@ pub struct InterrupterRegisters {
 
 impl InterrupterRegisters {
     pub fn pending(&self) -> bool {
-        self.flags.read() & 0x1 == 1
+        self.irq_flags.read() & 0x1 == 1
     }
 }
 

@@ -22,7 +22,9 @@ impl USBSystem {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
                 let dev = XHCI::create_from_device(dev);
-                // self.xhci.lock().replace(dev);
+                if dev.is_some() {
+                    self.xhci.lock().replace(dev.expect(""));
+                }
             },
             _ => {
                 debug!("[USB] Unknown USB Host Type at {}: {:?}",

@@ -9,7 +9,7 @@ QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
 						 -device qemu-xhci \
 						 -drive id=main_disk,file=ext/demo.img,if=none \
 						 -device ide-hd,drive=main_disk \
-						 # --trace events=./qemu_trace
+#						 --trace events=./qemu_trace
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg
@@ -37,7 +37,7 @@ clean:
 	@rm -rf build
 
 usb: $(iso)
-	@qemu-system-x86_64 $(QEMU_ARGS) -drive id=my_usb_disk,file=./ext/mbr.img,if=none \
+	@qemu-system-x86_64 $(QEMU_ARGS) -drive id=my_usb_disk,file=./ext/demo_usb.img,if=none \
 				    -device usb-storage,drive=my_usb_disk,id=usb0
 
 run: $(iso)

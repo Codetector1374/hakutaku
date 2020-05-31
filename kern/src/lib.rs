@@ -211,10 +211,6 @@ pub extern fn usb_process() -> ! {
         sleep(Duration::from_millis(1)).expect("");
     }
 
-    without_interrupts(|| {
-        G_USB.xhci.lock().as_mut().expect("").send_nop();
-    });
-
     loop {
         without_interrupts(||{
             G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();

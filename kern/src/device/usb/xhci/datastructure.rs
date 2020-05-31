@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::paging::MapperAllSizes;
 use core::ops::Deref;
-use crate::device::usb::xhci::consts::{TRB_TYPE_SHIFT, TRB_TYPE_LINK, TRB_TYPE_MASK, TRB_LINK_TOGGLE_MASK};
+use crate::device::usb::xhci::consts::{TRB_COMMON_TYPE_SHIFT, TRB_TYPE_LINK, TRB_COMMON_TYPE_MASK, TRB_LINK_TOGGLE_MASK, TRBS_PER_SEGMENT, TRB_COMMON_CYCLE_STATE_MASK, TRB_TYPE_NOOP_COMMAND};
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
@@ -25,8 +25,7 @@ impl Default for DeviceContextBaseAddressArray {
 #[derive(Copy, Clone)]
 pub struct EventRingSegmentEntry {
     pub addr: PhysAddr,
-    pub segment_size: u16,
-    _res0: u16,
+    pub segment_size: u32,
     _res1: u32,
 }
 const_assert_size!(EventRingSegmentEntry, 16);
@@ -36,34 +35,26 @@ impl Default for EventRingSegmentEntry {
         Self {
             addr: PhysAddr::new(0),
             segment_size: 0,
-            _res0: 0,
             _res1: 0,
         }
     }
 }
 
 impl EventRingSegmentEntry {
-    pub fn new(ptr: PhysAddr, size: u16) -> EventRingSegmentEntry {
+    pub fn new(ptr: PhysAddr, size: u32) -> EventRingSegmentEntry {
         EventRingSegmentEntry {
             addr: ptr,
             segment_size: size,
-            _res0: 0,
-            _res1: 1,
+            _res1: 0,
         }
     }
 }
 
 #[repr(C, align(64))]
+#[derive(Default)]
 pub struct EventRingSegmentTable {
     pub segments: [EventRingSegmentEntry; 16],
-}
-
-impl Default for EventRingSegmentTable {
-    fn default() -> Self {
-        EventRingSegmentTable {
-            segments: [Default::default(); 16],
-        }
-    }
+    pub segment_count: usize,
 }
 
 /* ----------------------- XHCI Ring ------------------------ */
@@ -106,10 +97,52 @@ impl XHCIRing {
                         PAGE_TABLE.read().translate_addr(ptr).expect("va pa translate")
                     });
                     ring.segments[idx].link_segment(ptr_pa);
+                    unsafe { ring.segments[idx].trbs[TRBS_PER_SEGMENT - 1].link.link_flags |= TRB_LINK_TOGGLE_MASK };
                 }
             }
         }
         ring
+    }
+
+    pub fn push(&mut self, mut trb: TRB) {
+        assert_ne!(self.segments.len(), 0, "no segments");
+        trb.set_cycle_state(self.cycle_state as u8);
+        self.segments[self.enqueue.0].trbs[self.enqueue.1] = trb;
+        if self.enqueue.1 < (TRBS_PER_SEGMENT - 2) { // Last element is Link
+            self.enqueue.1 += 1;
+        } else {
+            self.enqueue.1 = 0;
+            if self.enqueue.0 < self.segments.len() - 1 {
+                self.enqueue.0 += 1;
+            } else {
+                self.enqueue.0 = 0;
+            }
+        }
+    }
+
+    pub fn pop(&mut self, has_link: bool) -> TRB {
+        let trb = self.segments[self.dequeue.0].trbs[self.dequeue.1].clone();
+        if self.dequeue.1 < (TRBS_PER_SEGMENT - (if has_link { 2 } else { 1 })) {
+            self.dequeue.1 += 1;
+        } else {
+            self.dequeue.1 = 0;
+            if self.dequeue.0 < self.segments.len() - 1 {
+                self.dequeue.0 += 1;
+            } else {
+                self.dequeue.0 = 0;
+            }
+        }
+        trb
+    }
+
+    pub fn dequeue_pointer(&self) -> PhysAddr {
+        without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(
+                    &self.segments[self.dequeue.0].trbs[self.dequeue.1] as *const TRB
+                )
+            ).expect("PT Translation Error")
+        })
     }
 }
 
@@ -123,14 +156,14 @@ impl Debug for XHCIRing {
 /* --------------------- XHCI Ring Segment ---------------- */
 #[repr(C, align(4096))]
 pub struct XHCIRingSegment {
-    pub trbs: [TRB; 256],
+    pub trbs: [TRB; TRBS_PER_SEGMENT],
 }
-const_assert_size!(XHCIRingSegment, 4096);
+const_assert_size!(XHCIRingSegment, 16*TRBS_PER_SEGMENT);
 
 impl Default for XHCIRingSegment {
     fn default() -> Self {
         XHCIRingSegment {
-            trbs: [Default::default(); 256],
+            trbs: [Default::default(); TRBS_PER_SEGMENT],
         }
     }
 }
@@ -142,8 +175,7 @@ impl XHCIRingSegment {
     /// related flags, such as End TRB, Toggle Cycle, and no snoop.
     pub fn link_segment(&mut self, other: PhysAddr) {
         let mut link_trb = LinkTRB::new(other);
-        link_trb.link_flags |= TRB_LINK_TOGGLE_MASK;
-        self.trbs[255] = TRB { link: link_trb };
+        self.trbs[TRBS_PER_SEGMENT - 1] = TRB { link: link_trb };
     }
 }
 
@@ -167,6 +199,12 @@ impl TRB {
             None
         }
     }
+    pub fn set_cycle_state(&mut self, val: u8) {
+        let mut tmp = unsafe { self.pseudo.flags };
+        tmp &= !TRB_COMMON_CYCLE_STATE_MASK;
+        tmp |= (val as u16) & TRB_COMMON_CYCLE_STATE_MASK;
+        self.pseudo.flags = tmp
+    }
 }
 
 impl From<NormalTRB> for TRB {
@@ -183,7 +221,7 @@ impl TRB {
     }
 
     pub fn type_id(&self) -> u16 {
-        (unsafe { self.pseudo.flags } & TRB_TYPE_MASK) >> TRB_TYPE_SHIFT
+        (unsafe { self.pseudo.flags } & TRB_COMMON_TYPE_MASK) >> TRB_COMMON_TYPE_SHIFT
     }
 }
 
@@ -232,7 +270,7 @@ impl LinkTRB {
             next_trb: link,
             _res0: [0u8; 3],
             int_target: 0,
-            link_flags: ((TRB_TYPE_LINK as u16) << TRB_TYPE_SHIFT),
+            link_flags: ((TRB_TYPE_LINK as u16) << TRB_COMMON_TYPE_SHIFT),
             _res1: 0,
         }
     }
@@ -259,7 +297,7 @@ impl NormalTRB {
         NormalTRB {
             data_block: 0,
             interrupter_td_trblen: 0,
-            meta: 23 << 10 | 0x1,
+            meta: (TRB_TYPE_NOOP_COMMAND as u32) << TRB_COMMON_TYPE_SHIFT,
         }
     }
 }

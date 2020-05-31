@@ -324,40 +324,40 @@ impl XHCI {
         let ver = (self.capability_regs.length_and_ver.read() & CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
         trace!("[XHCI] Controller with version {:04x}", ver);
         // Populate Slots
-        // for t in self.extended_capability() {
-        //     match t {
-        //         ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
-        //             let mut ports = self.ports.lock();
-        //             for port in 0..port_count {
-        //                 let usbport = XHCIPort::new(port + port_offset);
-        //                 if major == 3 {
-        //                     if ports.len() > port as usize {
-        //                         let pg = ports.get_mut(port as usize).expect("has portgroup");
-        //                         assert!(pg.usb3_port.is_none());
-        //                         pg.usb3_port = Some(usbport);
-        //                     } else {
-        //                         assert_eq!(ports.len(), port as usize);
-        //                         let mut pg = XHCIPortGroup::default();
-        //                         pg.usb3_port = Some(usbport);
-        //                         ports.push(pg);
-        //                     }
-        //                 } else {
-        //                     if ports.len() > port as usize {
-        //                         let pg = ports.get_mut(port as usize).expect("has portgroup");
-        //                         assert!(pg.usb2_port.is_none());
-        //                         pg.usb2_port = Some(usbport);
-        //                     } else {
-        //                         assert_eq!(ports.len(), port as usize);
-        //                         let mut pg = XHCIPortGroup::default();
-        //                         pg.usb2_port = Some(usbport);
-        //                         ports.push(pg);
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //         _ => {}
-        //     }
-        // }
+        for t in self.extended_capability() {
+            match t {
+                ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
+                    let mut ports = self.ports.lock();
+                    for port in 0..port_count {
+                        let usbport = XHCIPort::new(port + port_offset);
+                        if major == 3 {
+                            if ports.len() > port as usize {
+                                let pg = ports.get_mut(port as usize).expect("has portgroup");
+                                assert!(pg.usb3_port.is_none());
+                                pg.usb3_port = Some(usbport);
+                            } else {
+                                assert_eq!(ports.len(), port as usize);
+                                let mut pg = XHCIPortGroup::default();
+                                pg.usb3_port = Some(usbport);
+                                ports.push(pg);
+                            }
+                        } else {
+                            if ports.len() > port as usize {
+                                let pg = ports.get_mut(port as usize).expect("has portgroup");
+                                assert!(pg.usb2_port.is_none());
+                                pg.usb2_port = Some(usbport);
+                            } else {
+                                assert_eq!(ports.len(), port as usize);
+                                let mut pg = XHCIPortGroup::default();
+                                pg.usb2_port = Some(usbport);
+                                ports.push(pg);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 

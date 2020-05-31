@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::paging::MapperAllSizes;
 use core::ops::Deref;
-use crate::device::usb::xhci::consts::{TRB_COMMON_TYPE_SHIFT, TRB_TYPE_LINK, TRB_COMMON_TYPE_MASK, TRB_LINK_TOGGLE_MASK, TRBS_PER_SEGMENT, TRB_COMMON_CYCLE_STATE_MASK, TRB_TYPE_NOOP_COMMAND};
+use crate::device::usb::xhci::consts::*;
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
@@ -183,6 +183,23 @@ impl XHCIRingSegment {
 }
 
 /* --------------------------- TRBs --------------------------- */
+pub enum TRBType {
+    Unknown(TRB),
+    Link(LinkTRB),
+    PortStatusChange(PortStatusChangeTRB),
+
+}
+
+impl From<TRB> for TRBType {
+    fn from(t: TRB) -> Self {
+        use TRBType::*;
+        match t.type_id() {
+            TRB_TYPE_LINK => Link(unsafe { t.link }),
+            TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe {t.port_status_change}),
+            _ => TRBType::Unknown(t),
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -249,7 +266,7 @@ pub struct PortStatusChangeTRB {
     _res1: [u8; 7],
     pub completion_code: u8,
     pub flags: u16,
-    _res2: u16
+    _res2: u16,
 }
 const_assert_size!(PortStatusChangeTRB, 16);
 

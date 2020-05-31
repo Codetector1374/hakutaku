@@ -97,6 +97,7 @@ impl XHCIOperationalRegisters {
     }
 
     pub fn get_port_operational_register(&self, port: u8) -> &'static mut XHCIPortOperationalRegisters {
+        assert_ne!(port, 0, "port can't be zero");
         unsafe { &mut *(((self as *const Self as usize) + 0x400 + 0x10 * (port as usize - 1)) as *mut XHCIPortOperationalRegisters) }
     }
 }
@@ -182,6 +183,9 @@ impl XHCI {
         None
     }
 
+    /// Special Function to handle the intel controller
+    /// where a mux is used to switch ports from EHCI to
+    /// xHCI.
     fn intel_ehci_xhci_handoff(&mut self) {
         if self.pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL {
             debug!("[XHCI] Intel Controller Detected. EHCI Handoff");
@@ -192,8 +196,101 @@ impl XHCI {
 
             let usb2_prm = self.pci_device.read_config_dword(USB_INTEL_USB2PRM);
             debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
+            // TODO!!! REMOVE & PORTS, this is a hack for me to keep usb2 functional
             self.pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm & ports);
         }
+    }
+
+    fn initialize_memory_structures(&mut self) -> Result<(), ()> {
+        // Step 1: Setup Device Context Base Address Array
+        if self.info.device_context_baa.is_none() {
+            self.info.device_context_baa = Some(Box::new(Default::default()));
+            let dcbaa_ptr = self.info.device_context_baa.as_deref_mut().expect("has thing") as *const DeviceContextBaseAddressArray;
+            let dcbaa_va = VirtAddr::new(dcbaa_ptr as u64);
+            let dcbaa_pa = without_interrupts(|| {
+                PAGE_TABLE.read().translate_addr(dcbaa_va).expect("Mapped")
+            });
+            assert!(dcbaa_pa.is_aligned(2048u64), "DCBAA Alignment");
+            self.operational_regs.device_context_base_addr_array_ptr.write(dcbaa_pa.as_u64());
+        } else {
+            panic!("[XHCI] dcbaa already setup");
+        }
+        trace!("[XHCI] DCBAA Setup complete");
+
+        // Step 2: Setup Command Ring (CRCR)
+        if self.info.command_ring.is_none() {
+            self.info.command_ring = Some(XHCIRing::new_with_capacity(1, true));
+            let crcr_va = VirtAddr::from_ptr(
+                self.info.command_ring.as_ref().expect("thing").segments[0].as_ref() as *const XHCIRingSegment);
+            let crcr_pa = without_interrupts(|| {
+                PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
+            });
+            trace!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
+            let tmp = self.operational_regs.command_ring_control.read();
+            if tmp & OP_CRCR_CRR_MASK == 0 {
+                let cyc_state = self.info.command_ring.as_ref().expect("").cycle_state as u64;
+                assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
+                let val64 = (tmp & OP_CRCR_RES_MASK) |
+                    (crcr_pa.as_u64() & OP_CRCR_CRPTR_MASK) |
+                    (cyc_state & OP_CRCR_CS_MASK);
+                self.operational_regs.command_ring_control.write(val64);
+            } else {
+                panic!("[XHCI] CrCr is Running");
+            }
+        } else {
+            panic!("[XHCI] CrCr already setup");
+        }
+        trace!("[XHCI] CRCR Setup complete");
+
+        // Setup Event Ring
+        self.info.event_ring = Some(XHCIRing::new_with_capacity(EVENT_RING_NUM_SEGMENTS, false));
+        self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
+        self.info.event_ring_table.as_mut().expect("").segment_count = EVENT_RING_NUM_SEGMENTS;
+
+        for idx in 0..EVENT_RING_NUM_SEGMENTS {
+            let ent = self.info.event_ring_table.as_mut().expect("");
+            ent.segments[idx].segment_size = TRBS_PER_SEGMENT as u32;
+            let va = VirtAddr::from_ptr(
+                self.info.event_ring.as_ref().expect("").
+                    segments[idx].deref() as *const XHCIRingSegment
+            );
+            let pa = without_interrupts(|| {
+                use crate::PAGE_TABLE;
+                PAGE_TABLE.read().translate_addr(va).expect("")
+            });
+            assert_eq!(pa.as_u64() & 0b11_1111, 0, "alignment");
+            ent.segments[idx].addr = pa;
+        }
+        // Update Interrupter 0 Dequeu Pointer
+        let dequeue_ptr_va = VirtAddr::from_ptr(
+            &self.info.event_ring.as_ref().expect("").segments[0].trbs[0] as *const TRB
+        );
+        let dequeu_ptr_pa = without_interrupts(|| {
+            use crate::PAGE_TABLE;
+            PAGE_TABLE.read().translate_addr(dequeue_ptr_va).expect("")
+        });
+        self.get_runtime_interrupt_register(0).event_ring_deque_ptr.
+            write(dequeu_ptr_pa.as_u64() & INT_ERDP_DEQUEUE_PTR_MASK);
+        // set ERST table register with correct count
+        let mut tmp = self.get_runtime_interrupt_register(0).event_ring_table_size.read();
+        tmp &= !INT_ERSTSZ_TABLE_SIZE_MASK;
+        tmp |= (EVENT_RING_NUM_SEGMENTS as u32) & INT_ERSTSZ_TABLE_SIZE_MASK;
+        self.get_runtime_interrupt_register(0).event_ring_table_size.write(tmp);
+        // Setup Event Ring Segment Table Pointer
+        let erst_va = VirtAddr::from_ptr(
+            self.info.event_ring_table.as_ref().expect("").
+                deref() as *const EventRingSegmentTable
+        );
+        let erst_pa = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(erst_va).expect("")
+        });
+        self.get_runtime_interrupt_register(0).event_ring_seg_table_ptr.write(erst_pa);
+
+        // TODO Setup Scratchpad Registers
+
+        // Zero device notification
+        self.operational_regs.dnctlr.write(0x0);
+        Ok(())
     }
 
     fn internal_initialize(&mut self) -> Result<(), ()> {
@@ -288,107 +385,6 @@ impl XHCI {
         }
     }
 
-
-    fn initialize_memory_structures(&mut self) -> Result<(), ()> {
-        // Step 1: Setup Device Context Base Address Array
-        if self.info.device_context_baa.is_none() {
-            self.info.device_context_baa = Some(Box::new(Default::default()));
-            let dcbaa_ptr = self.info.device_context_baa.as_deref_mut().expect("has thing") as *const DeviceContextBaseAddressArray;
-            let dcbaa_va = VirtAddr::new(dcbaa_ptr as u64);
-            let dcbaa_pa = without_interrupts(|| {
-                PAGE_TABLE.read().translate_addr(dcbaa_va).expect("Mapped")
-            });
-            assert!(dcbaa_pa.is_aligned(2048u64), "DCBAA Alignment");
-            self.operational_regs.device_context_base_addr_array_ptr.write(dcbaa_pa.as_u64());
-        } else {
-            panic!("[XHCI] dcbaa already setup");
-        }
-        trace!("[XHCI] DCBAA Setup complete");
-
-        // Step 2: Setup Command Ring (CRCR)
-        if self.info.command_ring.is_none() {
-            self.info.command_ring = Some(XHCIRing::new_with_capacity(1, true));
-            let crcr_va = VirtAddr::from_ptr(
-                self.info.command_ring.as_ref().expect("thing").segments[0].as_ref() as *const XHCIRingSegment);
-            let crcr_pa = without_interrupts(|| {
-                PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
-            });
-            trace!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
-            let tmp = self.operational_regs.command_ring_control.read();
-            if tmp & OP_CRCR_CRR_MASK == 0 {
-                let cyc_state = self.info.command_ring.as_ref().expect("").cycle_state as u64;
-                assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
-                let val64 = (tmp & OP_CRCR_RES_MASK) |
-                    (crcr_pa.as_u64() & OP_CRCR_CRPTR_MASK) |
-                    (cyc_state & OP_CRCR_CS_MASK);
-                self.operational_regs.command_ring_control.write(val64);
-            } else {
-                panic!("[XHCI] CrCr is Running");
-            }
-        } else {
-            panic!("[XHCI] CrCr already setup");
-        }
-        trace!("[XHCI] CRCR Setup complete");
-
-        // Setup Event Ring
-        self.info.event_ring = Some(XHCIRing::new_with_capacity(EVENT_RING_NUM_SEGMENTS, false));
-        self.info.event_ring_table = Some(Box::new(EventRingSegmentTable::default()));
-        self.info.event_ring_table.as_mut().expect("").segment_count = EVENT_RING_NUM_SEGMENTS;
-
-        for idx in 0..EVENT_RING_NUM_SEGMENTS {
-            let ent = self.info.event_ring_table.as_mut().expect("");
-            ent.segments[idx].segment_size = TRBS_PER_SEGMENT as u32;
-            let va = VirtAddr::from_ptr(
-                self.info.event_ring.as_ref().expect("").
-                    segments[idx].deref() as *const XHCIRingSegment
-            );
-            let pa = without_interrupts(|| {
-                use crate::PAGE_TABLE;
-                PAGE_TABLE.read().translate_addr(va).expect("")
-            });
-            assert_eq!(pa.as_u64() & 0b11_1111, 0, "alignment");
-            ent.segments[idx].addr = pa;
-        }
-        // Update Interrupter 0 Dequeu Pointer
-        let dequeue_ptr_va = VirtAddr::from_ptr(
-            &self.info.event_ring.as_ref().expect("").segments[0].trbs[0] as *const TRB
-        );
-        let dequeu_ptr_pa = without_interrupts(|| {
-            use crate::PAGE_TABLE;
-            PAGE_TABLE.read().translate_addr(dequeue_ptr_va).expect("")
-        });
-        self.get_runtime_interrupt_register(0).event_ring_deque_ptr.
-            write(dequeu_ptr_pa.as_u64() & INT_ERDP_DEQUEUE_PTR_MASK);
-        // set ERST table register with correct count
-        let mut tmp = self.get_runtime_interrupt_register(0).event_ring_table_size.read();
-        tmp &= !INT_ERSTSZ_TABLE_SIZE_MASK;
-        tmp |= (EVENT_RING_NUM_SEGMENTS as u32) & INT_ERSTSZ_TABLE_SIZE_MASK;
-        self.get_runtime_interrupt_register(0).event_ring_table_size.write(tmp);
-        // Setup Event Ring Segment Table Pointer
-        let erst_va = VirtAddr::from_ptr(
-            self.info.event_ring_table.as_ref().expect("").
-                deref() as *const EventRingSegmentTable
-        );
-        let erst_pa = without_interrupts(|| {
-            crate::PAGE_TABLE.read().translate_addr(erst_va).expect("")
-        });
-        self.get_runtime_interrupt_register(0).event_ring_seg_table_ptr.write(erst_pa);
-
-        // TODO Setup Scratchpad Registers
-
-        // Zero device notification
-        self.operational_regs.dnctlr.write(0x0);
-        Ok(())
-    }
-
-    pub fn hcc_flags(&mut self) -> u32 {
-        self.capability_regs.hcc_param1.read()
-    }
-
-    pub fn max_ports(&self) -> u8 {
-        self.info.max_port
-    }
-
     pub fn has_device(&self, p: &XHCIPort) -> bool {
         let port = p.port_id;
         if port > 0 {
@@ -419,13 +415,40 @@ impl XHCI {
                     INT_IRQ_FLAG_INT_PENDING_MASK); // Clear Interrupt
                 let er = self.info.event_ring.as_mut().expect("");
                 let trb = er.pop(false);
-                let tmp = er.dequeue_pointer().as_u64() | INT_ERDP_BUSY_MASK |
-                    (INT_ERDP_DESI_MASK & (er.dequeue.0 as u64));
-                int0_rs.event_ring_deque_ptr.write(tmp);
-                let trb = unsafe { trb.normal };
-                debug!("[XHCI] Event: {:x?}", trb);
+                if let Some(trb) = trb {
+                    let tmp = er.dequeue_pointer().as_u64() | INT_ERDP_BUSY_MASK |
+                        (INT_ERDP_DESI_MASK & (er.dequeue.0 as u64));
+                    int0_rs.event_ring_deque_ptr.write(tmp);
+                    self.handle_event_trb(trb);
+                } else {
+                    warn!("[XHCI] Event Ring is Empty when interrupt");
+                }
             }
         }
+    }
+
+    fn handle_event_trb(&mut self, trb: TRB) {
+        match trb.get_type() {
+            TRB_TYPE_EVNT_CMD_COMPLETE => {
+                debug!("[XHCI] CMD Complete");
+            },
+            TRB_TYPE_EVNT_PORT_STATUS_CHG => {
+                let trb = unsafe { trb.port_status_change };
+                self.poll_port_status(trb.port_id);
+            },
+            _ => {
+                debug!("[XHCI] unhandled trb with type: {}", trb.get_type());
+            }
+        }
+    }
+
+    fn poll_port_status(&mut self, port: u8) {
+        debug!("[XHCI] Port Status Changed on {}", port);
+        let port_op = self.operational_regs.get_port_operational_register(port);
+        let mut tmp = port_op.portsc.read();
+        tmp &= !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
+        tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK | OP_PORT_STATUS_WRC_MASK | OP_PORT_STATUS_PEC_MASK;
+        port_op.portsc.write(tmp);
     }
 
     pub fn poll_ports(&mut self) {

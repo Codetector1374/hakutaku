@@ -116,11 +116,14 @@ impl XHCIRing {
                 self.enqueue.0 += 1;
             } else {
                 self.enqueue.0 = 0;
+                // Toggle Cycle State
+                self.cycle_state = if self.cycle_state == 0 { 1 } else { 0 };
             }
         }
     }
 
-    pub fn pop(&mut self, has_link: bool) -> TRB {
+    pub fn pop(&mut self, has_link: bool) -> Option<TRB> {
+        // TODO: Check Cycle State
         let trb = self.segments[self.dequeue.0].trbs[self.dequeue.1].clone();
         if self.dequeue.1 < (TRBS_PER_SEGMENT - (if has_link { 2 } else { 1 })) {
             self.dequeue.1 += 1;
@@ -132,7 +135,7 @@ impl XHCIRing {
                 self.dequeue.0 = 0;
             }
         }
-        trb
+        Some(trb)
     }
 
     pub fn dequeue_pointer(&self) -> PhysAddr {
@@ -187,6 +190,7 @@ pub union TRB {
     pub normal: NormalTRB,
     pub setup: SetupStageTRB,
     pub link: LinkTRB,
+    pub port_status_change: PortStatusChangeTRB,
     pseudo: PseudoTRB,
 }
 const_assert_size!(TRB, 16);
@@ -204,6 +208,10 @@ impl TRB {
         tmp &= !TRB_COMMON_CYCLE_STATE_MASK;
         tmp |= (val as u16) & TRB_COMMON_CYCLE_STATE_MASK;
         self.pseudo.flags = tmp
+    }
+
+    pub fn get_type(&self) -> u16 {
+        unsafe { (self.pseudo.flags & TRB_COMMON_TYPE_MASK) >> TRB_COMMON_TYPE_SHIFT }
     }
 }
 
@@ -232,6 +240,18 @@ impl Default for TRB {
         }
     }
 }
+/* ------------ Event TRBs -------- */
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct PortStatusChangeTRB {
+    _res0: [u8; 3],
+    pub port_id: u8,
+    _res1: [u8; 7],
+    pub completion_code: u8,
+    pub flags: u16,
+    _res2: u16
+}
+const_assert_size!(PortStatusChangeTRB, 16);
 
 /* ------------ Pseudo TRB -------- */
 #[repr(C)]

@@ -173,6 +173,7 @@ impl XHCI {
                 info: Default::default(),
                 ports: Mutex::new(Default::default()),
             };
+            controller.intel_ehci_xhci_handoff();
             controller.internal_initialize().expect("");
             return Some(controller);
             // return None;
@@ -181,27 +182,17 @@ impl XHCI {
         None
     }
 
-    fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
-        let old_value = dev.read_config_bar_register(0);
-        dev.write_config_bar_register(0, 0xFFFF_FFFF);
-        let new_val = dev.read_config_bar_register(0);
-        dev.write_config_bar_register(0, old_value);
-        (!new_val) as usize
-    }
+    fn intel_ehci_xhci_handoff(&mut self) {
+        if self.pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL {
+            debug!("[XHCI] Intel Controller Detected. EHCI Handoff");
+            let ports = self.pci_device.read_config_dword(USB_INTEL_USB3PRM);
+            debug!("[XHCI] [Intel] Configurable Ports to SS: {:#x}", ports);
+            // Enable Super Speed on Ports that supports it
+            self.pci_device.write_config_dword(USB_INTEL_USB3_PSSEN, ports);
 
-    fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
-        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
-        unsafe {
-            &mut *((base_ptr + (self.runtime_offset as u64)
-                + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters)
-        }
-    }
-
-    fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
-        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
-        unsafe {
-            &mut *((base_ptr + (self.doorbell_offset as u64) +
-                (offset as u64 * 4)) as *mut DoorBellRegister)
+            let usb2_prm = self.pci_device.read_config_dword(USB_INTEL_USB2PRM);
+            debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
+            self.pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm);
         }
     }
 
@@ -272,6 +263,31 @@ impl XHCI {
         // }
         Ok(())
     }
+
+    fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
+        let old_value = dev.read_config_bar_register(0);
+        dev.write_config_bar_register(0, 0xFFFF_FFFF);
+        let new_val = dev.read_config_bar_register(0);
+        dev.write_config_bar_register(0, old_value);
+        (!new_val) as usize
+    }
+
+    fn get_runtime_interrupt_register(&self, offset: u8) -> &'static mut InterrupterRegisters {
+        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
+        unsafe {
+            &mut *((base_ptr + (self.runtime_offset as u64)
+                + 0x20 + (offset as u64) * 0x20) as *mut InterrupterRegisters)
+        }
+    }
+
+    fn get_doorbell_regster(&self, offset: u8) -> &'static mut DoorBellRegister {
+        let base_ptr = self.capability_regs as *const XHCICapabilityRegisters as u64;
+        unsafe {
+            &mut *((base_ptr + (self.doorbell_offset as u64) +
+                (offset as u64 * 4)) as *mut DoorBellRegister)
+        }
+    }
+
 
     fn initialize_memory_structures(&mut self) -> Result<(), ()> {
         // Step 1: Setup Device Context Base Address Array

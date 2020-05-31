@@ -1,6 +1,12 @@
-/* ----- XHCI Capability Register Fields ------- */
 use core::time::Duration;
 
+/* ------ XHCI PCI Config Space ---------------- */
+pub const USB_INTEL_XUSB2PR: u8 = 0xD0;
+pub const USB_INTEL_USB2PRM: u8 = 0xD4;
+pub const USB_INTEL_USB3_PSSEN: u8 = 0xD8;
+pub const USB_INTEL_USB3PRM: u8 = 0xDC;
+
+/* ----- XHCI Capability Register Fields ------- */
 pub const CAP_HC_VERSION_SHIFT: u32 = 16;
 pub const CAP_HC_VERSION_MASK: u32 = 0xFFFF_0000;
 pub const CAP_HCCPARAMS1_MAX_PORT_SHIFT: u32 = 24;
@@ -8,7 +14,8 @@ pub const CAP_HCCPARAMS1_MAX_PORT_MASK: u32 = 0xFF00_0000;
 pub const CAP_HCCPARAMS1_SLOTS_SHIFT: u32 = 0;
 pub const CAP_HCCPARAMS1_SLOTS_MASK: u32 = 0x0000_00FF;
 
-pub const CAP_DBOFFSET_MASK: u32 = 0xFFFF_FFFC; // Bit 1:0 reserved
+pub const CAP_DBOFFSET_MASK: u32 = 0xFFFF_FFFC;
+// Bit 1:0 reserved
 pub const CAP_RTSOFFSET_MASK: u32 = 0xFFFF_FFE0; // Bit 4:0 reserved
 
 /* ------- XHCI Operation Register Fields ------ */

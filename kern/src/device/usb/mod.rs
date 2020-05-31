@@ -12,14 +12,14 @@ use crate::device::usb::xhci::port::XHCIPort;
 use x86_64::instructions::interrupts::without_interrupts;
 
 pub static G_USB: USBSystem = USBSystem {
-    xhci: Mutex::new(None),
+    xhci: RwLock::new(None),
     ports: RwLock::new(Vec::new()),
 };
 
 
 pub struct USBSystem {
     // TODO: Support Multiple Controller
-    pub xhci: Mutex<Option<XHCI>>,
+    pub xhci: RwLock<Option<XHCI>>,
     pub ports: RwLock<Vec<Arc<Mutex<XHCIPort>>>>
 }
 
@@ -29,10 +29,10 @@ impl USBSystem {
             PCISerialBusUSB::XHCI => {
                 let dev = XHCI::create_from_device(dev);
                 if dev.is_some() {
-                    self.xhci.lock().replace(dev.expect(""));
+                    self.xhci.write().replace(dev.expect(""));
                 }
                 without_interrupts(|| {
-                    self.xhci.lock().as_mut().expect("thing").send_slot_enable();
+                    self.xhci.read().as_ref().expect("thing").send_slot_enable();
                 });
             },
             _ => {

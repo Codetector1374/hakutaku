@@ -104,10 +104,17 @@ impl XHCIRing {
         ring
     }
 
-    pub fn push(&mut self, mut trb: TRB) {
+    pub fn push(&mut self, mut trb: TRB) -> PhysAddr {
         assert_ne!(self.segments.len(), 0, "no segments");
         trb.set_cycle_state(self.cycle_state as u8);
         self.segments[self.enqueue.0].trbs[self.enqueue.1] = trb;
+        let ptr = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(
+                    &self.segments[self.enqueue.0].trbs[self.enqueue.1] as *const TRB
+                )
+            ).expect("")
+        });
         if self.enqueue.1 < (TRBS_PER_SEGMENT - 2) { // Last element is Link
             self.enqueue.1 += 1;
         } else {
@@ -120,6 +127,7 @@ impl XHCIRing {
                 self.cycle_state = if self.cycle_state == 0 { 1 } else { 0 };
             }
         }
+        ptr
     }
 
     pub fn pop(&mut self, has_link: bool) -> Option<TRB> {
@@ -187,6 +195,7 @@ pub enum TRBType {
     Unknown(TRB),
     Link(LinkTRB),
     PortStatusChange(PortStatusChangeTRB),
+    CommandCompletion(CommandCompletionTRB),
 }
 
 impl From<TRB> for TRBType {
@@ -195,6 +204,7 @@ impl From<TRB> for TRBType {
         match t.type_id() {
             TRB_TYPE_LINK => Link(unsafe { t.link }),
             TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe {t.port_status_change}),
+            TRB_TYPE_EVNT_CMD_COMPLETE => CommandCompletion(unsafe {t.command_completion}),
             _ => TRBType::Unknown(t),
         }
     }
@@ -207,6 +217,7 @@ pub union TRB {
     pub setup: SetupStageTRB,
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
+    pub command_completion: CommandCompletionTRB,
     pseudo: PseudoTRB,
 }
 const_assert_size!(TRB, 16);
@@ -249,6 +260,17 @@ pub struct PortStatusChangeTRB {
     _res2: u16,
 }
 const_assert_size!(PortStatusChangeTRB, 16);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct CommandCompletionTRB {
+    pub trb_pointer: u64,
+    pub params: [u8; 3],
+    pub code: u8,
+    pub flags: u16,
+    pub vfid: u8,
+    pub slot: u8,
+}
 
 /* ------------ Pseudo TRB -------- */
 #[repr(C)]

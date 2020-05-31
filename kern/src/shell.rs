@@ -163,9 +163,7 @@ impl Shell {
                 Ok(0)
             }
             "u" => {
-                without_interrupts(|| {
-                    G_USB.xhci.lock().as_mut().expect("LOL").send_nop();
-                });
+                G_USB.xhci.read().as_ref().expect("LOL").send_nop();
                 Ok(0)
             },
             "usbsts" => {

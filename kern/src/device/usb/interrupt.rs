@@ -1,7 +1,7 @@
 use crate::device::usb::G_USB;
 
 pub fn usb_interrupt_handler() {
-    let mut xhci = G_USB.xhci.lock();
-    xhci.as_mut().unwrap().poll_interrupts();
+    let xhci = G_USB.xhci.read();
+    xhci.as_ref().unwrap().poll_interrupts();
 
 }

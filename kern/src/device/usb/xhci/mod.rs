@@ -127,7 +127,7 @@ impl XHCI {
             let interrupt = dev.read_config_dword_dep(0xF);
             let int_line = (interrupt >> 8) as u8;
             let int_num = interrupt as u8;
-            debug!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
+            trace!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
 
             // Step3: Setup MMIO Registers
             let size = Self::xhci_address_space_detect(&mut dev);
@@ -156,7 +156,7 @@ impl XHCI {
             });
             let mmio_vbase = va_root + base_offset;
             let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
-            debug!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
+            trace!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
             let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
             let op_regs  = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
             let doorbell_offset = cap_regs.doorbell_offset.read() & CAP_DBOFFSET_MASK;
@@ -178,7 +178,7 @@ impl XHCI {
             return Some(controller);
             // return None;
         }
-        debug!("[XHCI] No XHCI Controller Found");
+        error!("[XHCI] No XHCI Controller Found");
         None
     }
 
@@ -192,7 +192,7 @@ impl XHCI {
 
             let usb2_prm = self.pci_device.read_config_dword(USB_INTEL_USB2PRM);
             debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
-            self.pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm);
+            self.pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm & ports);
         }
     }
 
@@ -225,7 +225,7 @@ impl XHCI {
         self.get_runtime_interrupt_register(0).irq_control.write(0);
 
         let ver = (self.capability_regs.length_and_ver.read() & CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
-        info!("[XHCI] Controller with version {:04x}", ver);
+        trace!("[XHCI] Controller with version {:04x}", ver);
         // Populate Slots
         // for t in self.extended_capability() {
         //     match t {
@@ -313,16 +313,14 @@ impl XHCI {
             let crcr_pa = without_interrupts(|| {
                 PAGE_TABLE.read().translate_addr(crcr_va).expect("Unmapped")
             });
-            debug!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
+            trace!("[XHCI] CRCR initial {:x}", self.operational_regs.command_ring_control.read());
             let tmp = self.operational_regs.command_ring_control.read();
             if tmp & OP_CRCR_CRR_MASK == 0 {
                 let cyc_state = self.info.command_ring.as_ref().expect("").cycle_state as u64;
-                debug!("[XHCI] CYC State: {}", cyc_state);
                 assert_eq!(crcr_pa.as_u64() & 0b111111, 0, "alignment");
                 let val64 = (tmp & OP_CRCR_RES_MASK) |
                     (crcr_pa.as_u64() & OP_CRCR_CRPTR_MASK) |
                     (cyc_state & OP_CRCR_CS_MASK);
-                debug!("[XHCI] Writing to CRCR {:#x}", val64);
                 self.operational_regs.command_ring_control.write(val64);
             } else {
                 panic!("[XHCI] CrCr is Running");
@@ -414,11 +412,9 @@ impl XHCI {
             debug!("[XHCI] Int: Port Interrupt");
         }
         if self.operational_regs.status.read() & 0x1 << 3 != 0 {
-            debug!("[XHCI] has interrupt");
             self.operational_regs.status.write(0x1 << 3); // Clear Interrupt
             if self.get_runtime_interrupt_register(0).pending() {
                 let int0_rs = self.get_runtime_interrupt_register(0);
-                debug!("[XHCI] Has Pending Interrupt on Ch0 (CMDRing): 0x{:x}", int0_rs.irq_flags.read());
                 int0_rs.irq_flags.write(int0_rs.irq_flags.read() |
                     INT_IRQ_FLAG_INT_PENDING_MASK); // Clear Interrupt
                 let er = self.info.event_ring.as_mut().expect("");

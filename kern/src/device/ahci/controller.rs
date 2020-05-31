@@ -372,10 +372,10 @@ impl AHCIController {
 
         let tmp = port_reg.SSTS.read() & PxSSTS_DETMask;
         if tmp == PxSSTS_DET_ComInit {
-            debug!("[AHCI] Device Present, no communication");
+            warn!("[AHCI] Device Present, no communication");
         }
 
-        debug!("[AHCI] Spinup time: {:?}", PIT::current_time() - spinup_begin);
+        trace!("[AHCI] Spinup time: {:?}", PIT::current_time() - spinup_begin);
 
         let tmp = port_reg.SERR.read();
         if tmp != 0 {

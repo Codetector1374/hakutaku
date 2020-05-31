@@ -64,7 +64,7 @@ impl BlockDeviceManager {
         let device_id = self.next_device;
         self.next_device += 1;
         let device_name = format!("blk{}", device_id);
-        debug!("[BD] Registering device: {}", device_name);
+        trace!("[BD] Registering device: {}", device_name);
         self.children_map.insert(device_name.clone(), Default::default());
         self.devices.insert(device_name.clone(), dev.clone().into());
         let parts = scan_for_partitions(dev.as_ref());

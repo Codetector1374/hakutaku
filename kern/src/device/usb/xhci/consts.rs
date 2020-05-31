@@ -29,6 +29,9 @@ pub const OP_STS_HLT_SHIFT: u32 = 0;
 pub const OP_STS_HLT_MASK: u32 = 0x1 << OP_STS_HLT_SHIFT;
 pub const OP_STS_CNR_SHIFT: u32 = 11;
 pub const OP_STS_CNR_MASK: u32 = 1 << OP_STS_CNR_SHIFT;
+pub const OP_STS_HOST_ERR_MASK: u32 = 0x1 << 2;
+pub const OP_STS_EVNT_PENDING_MASK: u32 = 0x1 << 3;
+pub const OP_STS_PORT_PENDING_MASK: u32 = 0x1 << 4;
 
 pub const OP_CRCR_RCS_SHIFT: u64 = 0;
 pub const OP_CRCR_RCS_MASK: u64 = 1 << OP_CRCR_RCS_SHIFT;

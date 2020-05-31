@@ -177,7 +177,7 @@ impl XHCIRingSegment {
     /// address of the next segment.  The caller needs to set any Link TRB
     /// related flags, such as End TRB, Toggle Cycle, and no snoop.
     pub fn link_segment(&mut self, other: PhysAddr) {
-        let mut link_trb = LinkTRB::new(other);
+        let link_trb = LinkTRB::new(other);
         self.trbs[TRBS_PER_SEGMENT - 1] = TRB { link: link_trb };
     }
 }
@@ -187,7 +187,6 @@ pub enum TRBType {
     Unknown(TRB),
     Link(LinkTRB),
     PortStatusChange(PortStatusChangeTRB),
-
 }
 
 impl From<TRB> for TRBType {
@@ -204,7 +203,7 @@ impl From<TRB> for TRBType {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union TRB {
-    pub normal: NormalTRB,
+    pub command: CommandTRB,
     pub setup: SetupStageTRB,
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
@@ -213,13 +212,6 @@ pub union TRB {
 const_assert_size!(TRB, 16);
 
 impl TRB {
-    pub fn as_link_mut(&mut self) -> Option<&LinkTRB> {
-        if self.type_id() == TRB_TYPE_LINK {
-            Some(unsafe { &mut self.link })
-        } else {
-            None
-        }
-    }
     pub fn set_cycle_state(&mut self, val: u8) {
         let mut tmp = unsafe { self.pseudo.flags };
         tmp &= !TRB_COMMON_CYCLE_STATE_MASK;
@@ -232,19 +224,7 @@ impl TRB {
     }
 }
 
-impl From<NormalTRB> for TRB {
-    fn from(n: NormalTRB) -> Self {
-        TRB {
-            normal: n,
-        }
-    }
-}
-
 impl TRB {
-    pub fn active(&self) -> bool {
-        unsafe { self.normal }.meta & 0x1 == 1
-    }
-
     pub fn type_id(&self) -> u16 {
         (unsafe { self.pseudo.flags } & TRB_COMMON_TYPE_MASK) >> TRB_COMMON_TYPE_SHIFT
     }
@@ -313,29 +293,37 @@ impl LinkTRB {
     }
 }
 
-/* -------- Normal TRB ------------ */
+/* -------- Command TRB ------------ */
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct NormalTRB {
-    pub data_block: u64,
-    pub interrupter_td_trblen: u32,
-    pub meta: u32,
+#[derive(Copy, Clone, Default)]
+pub struct CommandTRB {
+    pub payload: [u32; 4],
 }
 
-impl Debug for NormalTRB {
+impl Debug for CommandTRB {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        let type_id = (self.meta >> 10) & 0b111111;
-        write!(f, "NormalTRB {{ type: {} }}", type_id)
+        let type_id = (self.payload[3] & TRB_COMMON_TYPE_MASK as u32) >> TRB_COMMON_TYPE_SHIFT as u32;
+        write!(f, "TRB {{ type: {} }}", type_id)
     }
 }
 
-impl NormalTRB {
-    pub fn new_noop() -> NormalTRB {
-        NormalTRB {
-            data_block: 0,
-            interrupter_td_trblen: 0,
-            meta: (TRB_TYPE_NOOP_COMMAND as u32) << TRB_COMMON_TYPE_SHIFT,
-        }
+impl CommandTRB {
+    pub fn new_noop() -> Self {
+        let mut trb = Self::default();
+        trb.payload[3] |= (TRB_TYPE_NOOP_COMMAND as u32) << (TRB_COMMON_TYPE_SHIFT as u32);
+        trb
+    }
+
+    pub fn enable_slot() -> Self {
+        let mut trb = Self::default();
+        trb.payload[3] |= (TRB_TYPE_ENABLE_SLOT_CMD as u32) << (TRB_COMMON_TYPE_SHIFT as u32);
+        trb
+    }
+}
+
+impl Into<TRB> for CommandTRB {
+    fn into(self) -> TRB {
+        TRB { command: self }
     }
 }
 

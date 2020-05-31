@@ -25,6 +25,9 @@ use self::consts::*;
 use self::datastructure::*;
 use self::port::*;
 use self::registers::*;
+use hashbrown::HashMap;
+use alloc::sync::Arc;
+use crate::device::ahci::structures::CommandTable;
 
 pub mod extended_capability;
 pub mod port;
@@ -43,7 +46,7 @@ pub struct XHCI {
     doorbell_offset: u32,
     runtime_offset: u32,
     info: XHCIInfo,
-    ports: Mutex<Vec<XHCIPortGroup>>,
+    ports: HashMap<u8, Arc<Mutex<XHCIPort>>>,
 }
 
 #[derive(Default)]
@@ -159,7 +162,7 @@ impl XHCI {
             let cap_regs = unsafe { &mut *(mmio_vbase.as_mut_ptr() as *mut XHCICapabilityRegisters) };
             trace!("[XHCI] Cap Len: {:x}", cap_regs.length_and_ver.read());
             let operation_offset = (cap_regs.length_and_ver.read() & 0xFF) as u8;
-            let op_regs  = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
+            let op_regs = unsafe { &mut *((mmio_vbase.as_u64() + operation_offset as u64) as *mut XHCIOperationalRegisters) };
             let doorbell_offset = cap_regs.doorbell_offset.read() & CAP_DBOFFSET_MASK;
             let runtime_offset = cap_regs.rts_offset.read() & CAP_RTSOFFSET_MASK;
             let mut controller = XHCI {
@@ -172,7 +175,7 @@ impl XHCI {
                 capability_regs: cap_regs,
                 operational_regs: op_regs,
                 info: Default::default(),
-                ports: Mutex::new(Default::default()),
+                ports: Default::default(),
             };
             controller.intel_ehci_xhci_handoff();
             controller.internal_initialize().expect("");
@@ -314,6 +317,9 @@ impl XHCI {
         // Step 4: Initialize Memory Structures
         self.initialize_memory_structures()?;
 
+        // Step 4.5: setup slot / port structures
+        self.setup_port_structures();
+
         // Step 5: Start the Controller !
         self.start()?;
 
@@ -323,42 +329,50 @@ impl XHCI {
 
         let ver = (self.capability_regs.length_and_ver.read() & CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
         trace!("[XHCI] Controller with version {:04x}", ver);
-        // Populate Slots
+
+        Ok(())
+    }
+
+    fn setup_port_structures(&mut self) {
+        for t in 0..=self.info.max_port {
+            let port_num = t + 1; // Port number is 1 based
+            // TODO: [MultiXHCI] remove the 0 hardcoded controller
+            self.ports.insert(port_num, Arc::new(Mutex::new(XHCIPort::new(0, port_num))));
+        }
+
+        // Pairs: [begin, end)
+        let mut usb2ports: Option<(u8, u8)> = None;
+        let mut usb3ports: Option<(u8, u8)> = None;
         for t in self.extended_capability() {
             match t {
-                ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset, port_count } => {
-                    let mut ports = self.ports.lock();
-                    for port in 0..port_count {
-                        let usbport = XHCIPort::new(port + port_offset);
-                        if major == 3 {
-                            if ports.len() > port as usize {
-                                let pg = ports.get_mut(port as usize).expect("has portgroup");
-                                assert!(pg.usb3_port.is_none());
-                                pg.usb3_port = Some(usbport);
-                            } else {
-                                assert_eq!(ports.len(), port as usize);
-                                let mut pg = XHCIPortGroup::default();
-                                pg.usb3_port = Some(usbport);
-                                ports.push(pg);
-                            }
-                        } else {
-                            if ports.len() > port as usize {
-                                let pg = ports.get_mut(port as usize).expect("has portgroup");
-                                assert!(pg.usb2_port.is_none());
-                                pg.usb2_port = Some(usbport);
-                            } else {
-                                assert_eq!(ports.len(), port as usize);
-                                let mut pg = XHCIPortGroup::default();
-                                pg.usb2_port = Some(usbport);
-                                ports.push(pg);
-                            }
-                        }
+                ExtendedCapabilityTag::SupportedProtocol { major, minor: _, port_offset: pg_base, port_count } => {
+                    if major == 3 {
+                        usb3ports = Some((pg_base, pg_base + port_count));
+                    } else {
+                        usb2ports = Some((pg_base, pg_base + port_count));
                     }
                 }
                 _ => {}
             }
         }
-        Ok(())
+        if usb2ports.is_some() & usb3ports.is_some() {
+            without_interrupts(|| {
+                let usb2ports = usb2ports.expect("");
+                let usb3ports = usb3ports.expect("");
+                for usb2 in usb2ports.0..usb2ports.1 {
+                    let mut port2 = self.ports.get(&usb2).expect("port?").lock();
+                    port2.port_type = XHCIPortSpeed::USB2;
+                    let offset = usb2 - usb2ports.0;
+                    let usb3 = usb3ports.0 + offset;
+                    if usb3 < usb3ports.1 {
+                        let mut port3 = self.ports.get(&usb3).expect("matching port").lock();
+                        port3.port_type = XHCIPortSpeed::USB3;
+                        port3.matching_port = Some(usb2);
+                        port2.matching_port = Some(usb3);
+                    }
+                }
+            });
+        }
     }
 
     fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
@@ -398,17 +412,14 @@ impl XHCI {
 
     pub fn poll_interrupts(&mut self) {
         let current_status = self.operational_regs.status.read();
-        if current_status & 0x4 != 0 {
+        let mut response = 0;
+        if current_status & OP_STS_HOST_ERR_MASK != 0 {
+            response |= OP_STS_HOST_ERR_MASK;
             debug!("[XHCI] Int: Host Error");
         }
-        if current_status & 0x8 != 0 {
+        if current_status & OP_STS_EVNT_PENDING_MASK != 0 {
+            response |= OP_STS_EVNT_PENDING_MASK;
             debug!("[XHCI] Int: Event Interrupt");
-        }
-        if current_status & 0x10 != 0 {
-            debug!("[XHCI] Int: Port Interrupt");
-        }
-        if self.operational_regs.status.read() & 0x1 << 3 != 0 {
-            self.operational_regs.status.write(0x1 << 3); // Clear Interrupt
             if self.get_runtime_interrupt_register(0).pending() {
                 let int0_rs = self.get_runtime_interrupt_register(0);
                 int0_rs.irq_flags.write(int0_rs.irq_flags.read() |
@@ -425,65 +436,99 @@ impl XHCI {
                 }
             }
         }
+        if current_status & OP_STS_PORT_PENDING_MASK != 0 {
+            response |= OP_STS_PORT_PENDING_MASK;
+            debug!("[XHCI] Int: Port Interrupt");
+        }
+        self.operational_regs.status.write(response); // Clear Interrupt
     }
 
     fn handle_event_trb(&mut self, trb: TRB) {
         match trb.get_type() {
             TRB_TYPE_EVNT_CMD_COMPLETE => {
                 debug!("[XHCI] CMD Complete");
-            },
+            }
             TRB_TYPE_EVNT_PORT_STATUS_CHG => {
                 let trb = unsafe { trb.port_status_change };
                 self.poll_port_status(trb.port_id);
-            },
+            }
             _ => {
                 debug!("[XHCI] unhandled trb with type: {}", trb.get_type());
             }
         }
     }
 
-    fn poll_port_status(&mut self, port: u8) {
-        debug!("[XHCI] Port Status Changed on {}", port);
-        let port_op = self.operational_regs.get_port_operational_register(port);
-        let mut tmp = port_op.portsc.read();
-        tmp &= !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
+    fn poll_port_status(&mut self, port_id: u8) {
+        debug!("[XHCI] Port Status Changed on {}", port_id);
+        let port_op = self.operational_regs.get_port_operational_register(port_id);
+        let port_status = port_op.portsc.read();
+        let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
         tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK | OP_PORT_STATUS_WRC_MASK | OP_PORT_STATUS_PEC_MASK;
         port_op.portsc.write(tmp);
+
+        // Check if a port is in it's ready state
+        let port_wrapper = self.ports.get(&port_id).cloned().expect("thing");
+        let mut port = port_wrapper.lock();
+        let ready_mask = OP_PORT_STATUS_CCS_MASK | OP_PORT_STATUS_PED_MASK;
+        let ready = port_op.portsc.read() & ready_mask == ready_mask;
+        match port.status {
+            XHCIPortStatus::Active => {
+                if !ready {
+                    port.status = XHCIPortStatus::Disconnected;
+                    // Perform Disconnection etc
+                }
+            }
+            _ => {
+                if ready {
+                    port.status = XHCIPortStatus::Connected;
+                    self.send_slot_enable();
+                    // Reset Port
+                } else {
+                    port.status = XHCIPortStatus::Disconnected;
+                }
+            }
+        }
+    }
+
+    pub fn send_slot_enable(&mut self) {
+        let cmd = CommandTRB::enable_slot();
+        self.info.command_ring.as_mut().expect("no cmd ring found").push(cmd.into());
+        self.get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
     }
 
     pub fn poll_ports(&mut self) {
-        let poll_port = |p: &mut XHCIPort| {
-            let port_op = self.operational_regs.get_port_operational_register(p.port_id);
-            let connected = port_op.portsc.read() & 0x1 == 1;
-            use XHCIPortStatus::*;
-            match p.status {
-                XHCIPortStatus::Disconnected => {
-                    if connected {
-                        // Connect
-                        debug!("Connecting device on port: {}", p.port_id);
-                        p.status = Active;
-                    }
-                }
-                _ => {
-                    if !connected {
-                        debug!("Disconnecting device on port: {}", p.port_id);
-                        p.status = Disconnected;
-                    }
-                }
-            }
-        };
-
-        for port_group in self.ports.lock().iter_mut() {
-            if let Some(usb3) = &mut port_group.usb3_port {
-                poll_port(usb3);
-                if let XHCIPortStatus::Disconnected = XHCIPortStatus::Disconnected {} else {
-                    continue;
-                }
-            }
-            if let Some(usb2) = &mut port_group.usb2_port {
-                poll_port(usb2);
-            }
-        }
+        // let poll_port = |p: &mut XHCIPort| {
+        //     let port_op = self.operational_regs.get_port_operational_register(p.port_id);
+        //     let connected = port_op.portsc.read() & 0x1 == 1;
+        //     use XHCIPortStatus::*;
+        //     match p.status {
+        //         XHCIPortStatus::Disconnected => {
+        //             if connected {
+        //                 // Connect
+        //                 debug!("Connecting device on port: {}", p.port_id);
+        //                 p.status = Active;
+        //             }
+        //         }
+        //         _ => {
+        //             if !connected {
+        //                 debug!("Disconnecting device on port: {}", p.port_id);
+        //                 p.status = Disconnected;
+        //             }
+        //         }
+        //     }
+        // };
+        //
+        // for port_group in self.ports.lock().iter_mut() {
+        //     if let Some(usb3) = &mut port_group.usb3_port {
+        //         poll_port(usb3);
+        //         if let XHCIPortStatus::Disconnected = XHCIPortStatus::Disconnected {} else {
+        //             continue;
+        //         }
+        //     }
+        //     if let Some(usb2) = &mut port_group.usb2_port {
+        //         poll_port(usb2);
+        //     }
+        // }
     }
 
     pub fn halt(&mut self) -> Result<(), ()> {
@@ -514,7 +559,6 @@ impl XHCI {
 
         let mut tmp = self.operational_regs.command.read();
         tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_INT_EN_MASK | OP_CMD_HSERR_EN_MASK;
-        debug!("[XHCI] command reg: {:#x}", tmp);
         self.operational_regs.command.write(tmp);
 
         let wait_target = PIT::current_time() + HALT_TIMEOUT;
@@ -563,7 +607,7 @@ impl XHCI {
     pub fn send_nop(&mut self) {
         let cmd_ring = self.info.command_ring.as_mut().expect("uninitialized");
         debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
-        cmd_ring.push(NormalTRB::new_noop().into());
+        cmd_ring.push(CommandTRB::new_noop().into());
         self.get_doorbell_regster(0).reg.write(0);
     }
 

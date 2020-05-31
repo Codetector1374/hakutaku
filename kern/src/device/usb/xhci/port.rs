@@ -1,11 +1,5 @@
 use volatile::Volatile;
 
-#[derive(Debug, Default)]
-pub struct XHCIPortGroup {
-    pub usb3_port: Option<XHCIPort>,
-    pub usb2_port: Option<XHCIPort>,
-}
-
 #[repr(C)]
 pub struct XHCIPortOperationalRegisters {
     /// Port Status & Ctrl
@@ -19,23 +13,36 @@ pub struct XHCIPortOperationalRegisters {
 }
 
 #[derive(Debug, Copy, Clone)]
+pub enum XHCIPortSpeed {
+    Unknown,
+    USB2,
+    USB3,
+}
+
+#[derive(Debug, Copy, Clone)]
 pub enum XHCIPortStatus {
+    Disconnected,
     Connected,
     Active,
-    Disconnected
 }
 
 #[derive(Debug)]
 pub struct XHCIPort {
+    pub controller_id: usize,
     pub port_id: u8,
+    pub matching_port: Option<u8>,
+    pub port_type: XHCIPortSpeed,
     pub status: XHCIPortStatus,
 }
 
 impl XHCIPort {
-    pub fn new(id: u8) -> XHCIPort {
-        XHCIPort {
-            port_id: id,
-            status: XHCIPortStatus::Disconnected,
+    pub fn new(controller: usize, port: u8) -> Self {
+        Self {
+            controller_id: controller,
+            port_id: port,
+            matching_port: None,
+            port_type: XHCIPortSpeed::Unknown,
+            status: XHCIPortStatus::Disconnected
         }
     }
 }

@@ -118,14 +118,16 @@ impl XHCIRing {
         if self.enqueue.1 < (TRBS_PER_SEGMENT - 2) { // Last element is Link
             self.enqueue.1 += 1;
         } else {
-            self.enqueue.1 = 0;
             if self.enqueue.0 < self.segments.len() - 1 {
                 self.enqueue.0 += 1;
             } else {
-                self.enqueue.0 = 0;
                 // Toggle Cycle State
+                debug!("[XHCI] Toggling State");
+                self.segments[self.enqueue.0].trbs[TRBS_PER_SEGMENT - 1].set_cycle_state(self.cycle_state as u8);
                 self.cycle_state = if self.cycle_state == 0 { 1 } else { 0 };
+                self.enqueue.0 = 0;
             }
+            self.enqueue.1 = 0;
         }
         ptr
     }

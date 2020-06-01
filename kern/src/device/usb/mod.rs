@@ -27,13 +27,20 @@ impl USBSystem {
     pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
-                let dev = XHCI::create_from_device(dev);
-                if dev.is_some() {
-                    self.xhci.write().replace(dev.expect(""));
-                }
                 without_interrupts(|| {
-                    self.xhci.read().as_ref().expect("thing").send_slot_enable();
+                    let dev = XHCI::create_from_device(dev);
+                    if dev.is_some() {
+                        match self.xhci.try_write() {
+                            Some(mut guard) => {
+                                guard.replace(dev.expect(""));
+                            },
+                            None => {
+                                error!("[USB] Failed to obtain mutex");
+                            }
+                        }
+                    }
                 });
+                // self.xhci.read().as_ref().expect("thing").send_slot_enable();
             },
             _ => {
                 debug!("[USB] Unknown USB Host Type at {}: {:?}",

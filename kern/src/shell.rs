@@ -163,7 +163,15 @@ impl Shell {
                 Ok(0)
             }
             "u" => {
-                G_USB.xhci.read().as_ref().expect("LOL").send_nop();
+                let repeat = if command.args.len() > 1 {
+                    command.args[1].parse::<u32>().unwrap_or_else(|_|{1})
+                } else {
+                    1
+                };
+                for _ in 0..repeat {
+                    G_USB.xhci.read().as_ref().expect("LOL").send_nop();
+                    sleep(Duration::from_millis(10));
+                }
                 Ok(0)
             },
             "usbsts" => {

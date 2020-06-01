@@ -2,6 +2,12 @@ use crate::device::usb::G_USB;
 
 pub fn usb_interrupt_handler() {
     let xhci = G_USB.xhci.read();
-    xhci.as_ref().unwrap().poll_interrupts();
-
+    match xhci.as_ref() {
+        Some(r) => {
+            r.handle_interrupt();
+        },
+        _ => {
+            warn!("[XHCI] Interrupt while XHCI is None");
+        }
+    }
 }

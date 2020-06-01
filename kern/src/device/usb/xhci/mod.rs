@@ -80,7 +80,6 @@ pub struct XHCIInfo {
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
-    pending: HashMap<u64, Arc<RwLock<Option<CommandCompletionTRB>>>>,
 }
 
 impl Debug for XHCIInfo {
@@ -205,7 +204,6 @@ impl XHCI {
             controller.intel_ehci_xhci_handoff();
             controller.internal_initialize().expect("");
             return Some(controller);
-            // return None;
         }
         error!("[XHCI] No XHCI Controller Found");
         None
@@ -215,8 +213,11 @@ impl XHCI {
     /// where a mux is used to switch ports from EHCI to
     /// xHCI.
     fn intel_ehci_xhci_handoff(&mut self) {
-        if self.pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL {
-            debug!("[XHCI] Intel Controller Detected. EHCI Handoff");
+        if self.pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL &&
+            (
+                self.pci_device.info.device_id == 0x8c31
+            ) {
+            debug!("[XHCI] Intel Controller Detected: Dev: {:#x}. EHCI Handoff", self.pci_device.info.device_id);
             let ports = self.pci_device.read_config_dword(USB_INTEL_USB3PRM);
             debug!("[XHCI] [Intel] Configurable Ports to SS: {:#x}", ports);
             // Enable Super Speed on Ports that supports it
@@ -357,12 +358,12 @@ impl XHCI {
         // Clear Interrupt Ctrl / Pending
         self.regs.lock()
             .get_runtime_interrupt_register(0)
-            .irq_flags.write(INT_IRQ_FLAG_INT_PENDING_MASK | INT_IRQ_FLAG_INT_EN_MASK);
-        self.regs.lock().get_runtime_interrupt_register(0).irq_control.write(0);
+            .iman.write(INT_IRQ_FLAG_INT_PENDING_MASK | INT_IRQ_FLAG_INT_EN_MASK);
+        self.regs.lock().get_runtime_interrupt_register(0).imod.write(0);
 
         let ver = (self.regs.lock().capability_regs.length_and_ver.read() &
-                                 CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
-        trace!("[XHCI] Controller with version {:04x}", ver);
+            CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
+        debug!("[XHCI] Controller with version {:04x}", ver);
 
         Ok(())
     }
@@ -428,7 +429,8 @@ impl XHCI {
         }
     }
 
-    pub fn poll_interrupts(&self) {
+    /// Must be called without interrupt
+    pub fn handle_interrupt(&self) {
         let current_status = self.regs.lock().operational_regs.status.read();
         let mut response = 0;
         if current_status & OP_STS_HOST_ERR_MASK != 0 {
@@ -440,7 +442,7 @@ impl XHCI {
             debug!("[XHCI] Int: Event Interrupt");
             if self.regs.lock().get_runtime_interrupt_register(0).pending() {
                 let int0_rs = self.regs.lock().get_runtime_interrupt_register(0);
-                int0_rs.irq_flags.write(int0_rs.irq_flags.read() |
+                int0_rs.iman.write(int0_rs.iman.read() |
                     INT_IRQ_FLAG_INT_PENDING_MASK); // Clear Interrupt
                 let (trb, er_deq_0, er_deq_ptr) = {
                     let mut info = self.info.write();
@@ -459,9 +461,26 @@ impl XHCI {
         }
         if current_status & OP_STS_PORT_PENDING_MASK != 0 {
             response |= OP_STS_PORT_PENDING_MASK;
+            for port in 1..=self.info.read().max_port {
+                self.poll_port_status(port);
+            }
             debug!("[XHCI] Int: Port Interrupt");
         }
-        self.regs.lock().operational_regs.status.write(response); // Clear Interrupt
+
+        if current_status & (OP_STS_EVNT_PENDING_MASK | OP_STS_PORT_PENDING_MASK | OP_STS_HOST_ERR_MASK) == 0 {
+            warn!("[XHCI] Interrupt without anything, checking command ring registers");
+            let reg = self.regs.lock().get_runtime_interrupt_register(0);
+            reg.iman.write(reg.iman.read());
+        }
+
+        match self.regs.try_lock() {
+            None => {
+                debug!("[XHCI] Failed to lock regs");
+            }
+            Some(mut g) => {
+                g.operational_regs.status.write(response); // Clear Interrupt
+            }
+        }
     }
 
     fn handle_event_trb(&self, trb: TRB) {
@@ -470,19 +489,14 @@ impl XHCI {
         match tmp {
             CommandCompletion(trb) => {
                 let ptr = trb.trb_pointer;
-                match self.info.read().pending.get(&ptr) {
-                    Some(t) => {
-                        *t.write() = Some(trb.clone());
-                    },
-                    _ => {}
-                }
-            },
+                debug!("[XHCI] Command @ {:#x} completed", ptr);
+            }
             PortStatusChange(trb) => {
                 self.poll_port_status(trb.port_id);
-            },
+            }
             Unknown(trb) => {
                 debug!("[XHCI] unhandled trb with type: {}", trb.get_type());
-            },
+            }
             _ => {
                 warn!("[XHCI] Unhandled Event TRB Type")
             }
@@ -490,7 +504,6 @@ impl XHCI {
     }
 
     fn poll_port_status(&self, port_id: u8) {
-        debug!("[XHCI] Port Status Changed on {}", port_id);
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
         let port_status = port_op.portsc.read();
         let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
@@ -512,7 +525,8 @@ impl XHCI {
             _ => {
                 if ready {
                     port.status = XHCIPortStatus::Connected;
-                    self.send_slot_enable();
+                    debug!("[XHCI] Port {} connected", port_id);
+                    // self.send_slot_enable();
                     // Reset Port
                 } else {
                     port.status = XHCIPortStatus::Disconnected;
@@ -524,58 +538,12 @@ impl XHCI {
     pub fn send_slot_enable(&self) {
         let cmd = CommandTRB::enable_slot();
         let ptr = self.info.write().command_ring.as_mut()
-                    .expect("no cmd ring found").push(cmd.into()).as_u64();
+            .expect("no cmd ring found").push(cmd.into()).as_u64();
         debug!("[XHCI] Sending Slot EN");
-        // self.regs.lock().get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
-        let response = self.send_command_and_wait(ptr);
-        match response {
-            Some(r) => {
-                if r.slot != 0 && r.code == 1 {
-                    debug!("[XHCI] Enable Slot {}", r.slot);
-                } else {
-                    error!("[XHCI] Enable Slot returned 0");
-                }
-            },
-            _ => {
-                error!("[XHCI] Failed to enable slot. timeout");
-            }
-        }
+        self.regs.lock().get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
     }
 
-    pub fn poll_ports(&mut self) {
-        // let poll_port = |p: &mut XHCIPort| {
-        //     let port_op = self.operational_regs.get_port_operational_register(p.port_id);
-        //     let connected = port_op.portsc.read() & 0x1 == 1;
-        //     use XHCIPortStatus::*;
-        //     match p.status {
-        //         XHCIPortStatus::Disconnected => {
-        //             if connected {
-        //                 // Connect
-        //                 debug!("Connecting device on port: {}", p.port_id);
-        //                 p.status = Active;
-        //             }
-        //         }
-        //         _ => {
-        //             if !connected {
-        //                 debug!("Disconnecting device on port: {}", p.port_id);
-        //                 p.status = Disconnected;
-        //             }
-        //         }
-        //     }
-        // };
-        //
-        // for port_group in self.ports.lock().iter_mut() {
-        //     if let Some(usb3) = &mut port_group.usb3_port {
-        //         poll_port(usb3);
-        //         if let XHCIPortStatus::Disconnected = XHCIPortStatus::Disconnected {} else {
-        //             continue;
-        //         }
-        //     }
-        //     if let Some(usb2) = &mut port_group.usb2_port {
-        //         poll_port(usb2);
-        //     }
-        // }
-    }
+    pub fn poll_ports(&self) {}
 
     pub fn halt(&mut self) -> Result<(), ()> {
         if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
@@ -620,7 +588,10 @@ impl XHCI {
             sleep(Duration::from_millis(1)).expect("slept");
         };
 
-        self.poll_interrupts();
+        without_interrupts(|| {
+            self.handle_interrupt();
+        });
+        debug!("[XHCI] Finished Initial Int Poll");
 
         Ok(())
     }
@@ -652,48 +623,16 @@ impl XHCI {
         Ok(())
     }
 
-    pub fn send_command_and_wait(&self, addr: u64) -> Option<CommandCompletionTRB> {
-        let watch = Arc::new(RwLock::new(None));
-        without_interrupts(|| {
-            self.info.write().pending.insert(addr, watch.clone());
-            self.regs.lock().get_doorbell_regster(0).reg.write(0);
-        });
-        debug!("[XHCI] Waiting");
-        let to_target = Duration::from_millis(100) + PIT::current_time();
-        loop {
-            let lol = without_interrupts(|| {
-                match watch.try_read() {
-                    Some(r) => {
-                        if let Some(trb) = r.clone() {
-                            return Some(trb.clone());
-                        }
-                        None
-                    },
-                    _ => {
-                        None
-                    }
-                }
-            });
-            if let Some(trb) = lol {
-                return Some(trb);
-            }
-            if PIT::current_time() > to_target {
-                error!("[XHCI] Command Ring Waiting Timeout");
-                return None;
-            }
-            sleep(Duration::from_millis(10)).expect("slept");
-        }
-    }
-
     pub fn send_nop(&self) {
-        let ptr = {
+        {
             let mut info = self.info.write();
             let cmd_ring = info.command_ring.as_mut().expect("uninitialized");
             debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
-            cmd_ring.push(CommandTRB::new_noop().into()).as_u64()
-        };
-        self.send_command_and_wait(ptr).expect("lol");
-        debug!("[XHCI] No Op Complete");
+            cmd_ring.push(CommandTRB::new_noop().into()).as_u64();
+        }
+        without_interrupts(|| {
+            self.regs.lock().get_doorbell_regster(0).reg.write(0);
+        });
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

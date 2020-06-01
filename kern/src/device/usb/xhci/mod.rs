@@ -80,7 +80,7 @@ pub struct XHCIInfo {
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
-    pending: HashMap<u64, Arc<RwLock<bool>>>,
+    pending: HashMap<u64, Arc<RwLock<Option<CommandCompletionTRB>>>>,
 }
 
 impl Debug for XHCIInfo {
@@ -342,8 +342,7 @@ impl XHCI {
             let mut tmp = self.regs.lock().operational_regs.config.read();
             tmp = (tmp & (!CAP_HCCPARAMS1_SLOTS_MASK)) | (info.max_slot as u32);
             self.regs.lock().operational_regs.config.write(tmp);
-            debug!("[XHCI] OR->config <= {} slots", info.max_slot);
-            debug!("[XHCI] nmbrPorts = {}", info.max_port);
+            debug!("[XHCI] nmbrSlot= {}, nmbrPorts = {}", info.max_slot, info.max_port);
         }
 
         // Step 4: Initialize Memory Structures
@@ -473,11 +472,10 @@ impl XHCI {
                 let ptr = trb.trb_pointer;
                 match self.info.read().pending.get(&ptr) {
                     Some(t) => {
-                        *t.write() = true;
+                        *t.write() = Some(trb.clone());
                     },
                     _ => {}
                 }
-                debug!("[XHCI] Command at {:#x} completed", ptr);
             },
             PortStatusChange(trb) => {
                 self.poll_port_status(trb.port_id);
@@ -525,8 +523,23 @@ impl XHCI {
 
     pub fn send_slot_enable(&self) {
         let cmd = CommandTRB::enable_slot();
-        self.info.write().command_ring.as_mut().expect("no cmd ring found").push(cmd.into());
-        self.regs.lock().get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
+        let ptr = self.info.write().command_ring.as_mut()
+                    .expect("no cmd ring found").push(cmd.into()).as_u64();
+        debug!("[XHCI] Sending Slot EN");
+        // self.regs.lock().get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
+        let response = self.send_command_and_wait(ptr);
+        match response {
+            Some(r) => {
+                if r.slot != 0 && r.code == 1 {
+                    debug!("[XHCI] Enable Slot {}", r.slot);
+                } else {
+                    error!("[XHCI] Enable Slot returned 0");
+                }
+            },
+            _ => {
+                error!("[XHCI] Failed to enable slot. timeout");
+            }
+        }
     }
 
     pub fn poll_ports(&mut self) {
@@ -639,6 +652,39 @@ impl XHCI {
         Ok(())
     }
 
+    pub fn send_command_and_wait(&self, addr: u64) -> Option<CommandCompletionTRB> {
+        let watch = Arc::new(RwLock::new(None));
+        without_interrupts(|| {
+            self.info.write().pending.insert(addr, watch.clone());
+            self.regs.lock().get_doorbell_regster(0).reg.write(0);
+        });
+        debug!("[XHCI] Waiting");
+        let to_target = Duration::from_millis(100) + PIT::current_time();
+        loop {
+            let lol = without_interrupts(|| {
+                match watch.try_read() {
+                    Some(r) => {
+                        if let Some(trb) = r.clone() {
+                            return Some(trb.clone());
+                        }
+                        None
+                    },
+                    _ => {
+                        None
+                    }
+                }
+            });
+            if let Some(trb) = lol {
+                return Some(trb);
+            }
+            if PIT::current_time() > to_target {
+                error!("[XHCI] Command Ring Waiting Timeout");
+                return None;
+            }
+            sleep(Duration::from_millis(10)).expect("slept");
+        }
+    }
+
     pub fn send_nop(&self) {
         let ptr = {
             let mut info = self.info.write();
@@ -646,25 +692,8 @@ impl XHCI {
             debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
             cmd_ring.push(CommandTRB::new_noop().into()).as_u64()
         };
-        let watch = Arc::new(RwLock::new(false));
-        without_interrupts(|| {
-            self.info.write().pending.insert(ptr, watch.clone());
-            self.regs.lock().get_doorbell_regster(0).reg.write(0);
-        });
-        debug!("[XHCI] Waiting on NOOP at {:#x} Complete", ptr);
-        loop {
-            let result = without_interrupts(|| {
-                match watch.try_read() {
-                    Some(r) => *r,
-                    None => false
-                }
-            });
-            if result {
-                break;
-            }
-            sleep(Duration::from_micros(1)).expect("");
-        }
-        debug!("[XHCI] Command Complete");
+        self.send_command_and_wait(ptr).expect("lol");
+        debug!("[XHCI] No Op Complete");
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

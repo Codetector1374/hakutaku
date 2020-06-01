@@ -69,7 +69,6 @@ pub mod memory;
 pub mod shell;
 pub mod logger;
 pub mod process;
-pub mod syscall;
 
 lazy_static! {
     static ref PAGE_TABLE: RwLock<RecursivePageTable<'static>> = {

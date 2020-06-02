@@ -6,17 +6,20 @@ use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::structures::paging::MapperAllSizes;
 use core::ops::Deref;
 use crate::device::usb::xhci::consts::*;
+use alloc::alloc::Global;
+use core::alloc::{AllocRef, Layout, AllocInit};
+use core::ptr::NonNull;
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
-    array: [u8; 2048]
+    pub entries: [PhysAddr; 256]
 }
 const_assert_size!(DeviceContextBaseAddressArray, 2048);
 
 impl Default for DeviceContextBaseAddressArray {
     fn default() -> Self {
         DeviceContextBaseAddressArray {
-            array: [0u8; 2048],
+            entries: unsafe { core::mem::zeroed() },
         }
     }
 }
@@ -211,9 +214,9 @@ impl From<TRB> for TRBType {
         use TRBType::*;
         match t.type_id() {
             TRB_TYPE_LINK => Link(unsafe { t.link }),
-            TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe {t.port_status_change}),
-            TRB_TYPE_EVNT_CMD_COMPLETE => CommandCompletion(unsafe {t.command_completion}),
-            TRB_TYPE_EVNT_HC => HostControllerEvent(unsafe {t.host_controller_event}),
+            TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe { t.port_status_change }),
+            TRB_TYPE_EVNT_CMD_COMPLETE => CommandCompletion(unsafe { t.command_completion }),
+            TRB_TYPE_EVNT_HC => HostControllerEvent(unsafe { t.host_controller_event }),
             _ => TRBType::Unknown(t),
         }
     }
@@ -247,7 +250,7 @@ impl TRB {
     }
 
     pub fn get_cycle_state(&self) -> u8 {
-        (unsafe {self.pseudo.flags} & TRB_COMMON_CYCLE_STATE_MASK) as u8
+        (unsafe { self.pseudo.flags } & TRB_COMMON_CYCLE_STATE_MASK) as u8
     }
 
     pub fn get_type(&self) -> u16 {
@@ -401,8 +404,136 @@ pub struct SetupStageTRB {
 }
 const_assert_size!(SetupStageTRB, 16);
 
+/* ------------- Device Context ------------- */
 
+#[repr(C, align(2048))]
+#[derive(Default)]
+pub struct DeviceContextArray {
+    pub slot: SlotContext,
+    pub endpoint: [EndpointContext; 31],
+}
 
+macro_rules! set_field {
+    ($var: expr, $shift: expr, $mask: expr, $val: expr) => {{
+        let tmp = $var & !$mask;
+        $var = tmp | (($val.checked_shl($shift).unwrap_or(0)) & $mask);
+    }};
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct EndpointContext {
+    dword1: u32,
+    pub flags1: u8,
+    pub max_burst_size: u8,
+    pub max_packet_size: u16,
+    pub dequeu_pointer: u64,
+    pub average_trb_len: u16,
+    max_esit_payload_lo: u16,
+    _res0: [u32; 3],
+}
+const_assert_size!(EndpointContext, 32);
+impl EndpointContext {
+    pub fn set_lsa_bit(&mut self) {
+        self.dword1 |= EP_CTX_LSA_MASK;
+    }
+
+    pub fn set_cerr(&mut self, val: u8) {
+        set_field!(self.dword1,
+            EP_CTX_CERR_SHIFT, EP_CTX_CERR_MASK,
+            val as u32
+        );
+    }
+
+    pub fn set_ep_type(&mut self, val: u8) {
+        set_field!(self.dword1,
+            EP_CTX_EPTYPE_SHIFT, EP_CTX_EPTYPE_MASK,
+            val as u32
+        );
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct SlotContext {
+    // DWORD1
+    pub dword1: u32,
+    // DWORD2
+    pub max_exit_latency: u16,
+    pub root_hub_port_number: u8,
+    pub numbr_ports: u8,
+    // DWORD3
+    pub hub_slot_id: u8,
+    pub tt_port_number: u8,
+    pub interrupter_ttt: u16,
+    // DWORD 4
+    pub device_addr: u8,
+    _res0: [u8; 2],
+    pub slot_state: u8,
+    // DWORD 5-8
+    _res1: [u32; 4],
+}
+const_assert_size!(SlotContext, 32);
+
+impl SlotContext {
+    pub fn set_speed(&mut self, speed: u8) {
+        set_field!(self.dword1,
+            SLOT_CTX_SPEED_SHIFT, SLOT_CTX_SPEED_MASK,
+            (speed as u32)
+        );
+    }
+
+    pub fn set_context_entries(&mut self, max_entry: u8) {
+        set_field!(self.dword1,
+            SLOT_CTX_ENTRYS_SHIFT, SLOT_CTX_ENTRYS_MASK,
+            (max_entry as u32)
+        );
+    }
+}
+
+/* ------------- Scratchpad ----------------- */
+#[repr(C, align(4096))]
+pub struct ScratchPadBufferArray {
+    scratchpads: [PhysAddr; 1024],
+    page_size: usize,
+}
+
+impl ScratchPadBufferArray {
+    pub fn new_with_capacity(num: usize, page_size: usize) -> Self {
+        assert!(num <= 1024, "unsupported count > 1024");
+        let mut thing = Self {
+            scratchpads: unsafe { core::mem::zeroed() },
+            page_size,
+        };
+        for i in 0..num {
+            let ptr = VirtAddr::from_ptr(
+                Global.alloc(Layout::from_size_align(page_size, page_size).expect("alignment"),
+                             AllocInit::Zeroed).expect("alloc failed").ptr.as_ptr()
+            );
+            without_interrupts(|| {
+                let pt = crate::PAGE_TABLE.read();
+                thing.scratchpads[i] = pt.translate_addr(ptr).expect("mapped");
+            });
+        }
+        thing
+    }
+}
+
+impl Drop for ScratchPadBufferArray {
+    fn drop(&mut self) {
+        debug!("[XHCI] Freeing scratchpad buffers");
+        for pad in self.scratchpads.iter() {
+            let ptr = pad.as_u64();
+            if ptr != 0 {
+                unsafe {
+                    Global.dealloc(NonNull::<u8>::new_unchecked(ptr as *mut u8),
+                                   Layout::from_size_align(self.page_size, self.page_size)
+                                       .expect("align"))
+                };
+            }
+        }
+    }
+}
 
 
 

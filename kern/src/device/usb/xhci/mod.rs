@@ -29,6 +29,9 @@ use hashbrown::HashMap;
 use alloc::sync::Arc;
 use crate::device::ahci::structures::CommandTable;
 use x86_64::instructions::tlb::flush_all;
+use core::cmp::max;
+use core::option::Option::Some;
+use crate::hardware::keyboard::blocking_get_char;
 
 pub mod extended_capability;
 pub mod port;
@@ -43,7 +46,7 @@ pub struct XHCI {
     mmio_size: usize,
     regs: Mutex<XHCIRegisters>,
     info: RwLock<XHCIInfo>,
-    ports: HashMap<u8, Arc<Mutex<XHCIPort>>>,
+    pub ports: HashMap<u8, Arc<Mutex<XHCIPort>>>,
 }
 
 pub struct XHCIRegisters {
@@ -71,16 +74,36 @@ impl XHCIRegisters {
     }
 }
 
-#[derive(Default)]
 pub struct XHCIInfo {
     max_slot: u8,
     /// This field also double as the num of ports,
     /// since the port number starts from 1
     max_port: u8,
+    page_size: u32,
+    big_context: bool,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
+    device_contexts: [Option<Box<DeviceContextArray>>; 255],
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
+    scratchpads: Option<Box<ScratchPadBufferArray>>,
+}
+
+impl Default for XHCIInfo {
+    fn default() -> Self {
+        Self {
+            max_slot: 0,
+            max_port: 0,
+            page_size: 0,
+            big_context: false,
+            device_context_baa: None,
+            device_contexts: [None; 255],
+            command_ring: None,
+            event_ring: None,
+            event_ring_table: None,
+            scratchpads: None,
+        }
+    }
 }
 
 impl Debug for XHCIInfo {
@@ -317,7 +340,23 @@ impl XHCI {
         });
         self.regs.lock().get_runtime_interrupt_register(0).event_ring_seg_table_ptr.write(erst_pa);
 
-        // TODO Setup Scratchpad Registers
+        // Setup Scratchpad Registers
+        let tmp = self.regs.lock().capability_regs.hcs_params[2].read();
+        let mut num_sp = (tmp & CAP_HCSPARAMS2_MAX_SCRATCH_H_MSAK)
+            >> CAP_HCSPARAMS2_MAX_SCRATCH_H_SHIFT;
+        num_sp <<= 5;
+        num_sp |= (tmp & CAP_HCSPARAMS2_MAX_SCRATCH_L_MSAK) >> CAP_HCSPARAMS2_MAX_SCRATCH_L_SHIFT;
+        if num_sp > 0 {
+            info.scratchpads = Some(Box::new(
+                ScratchPadBufferArray::new_with_capacity(num_sp as usize, info.page_size as usize)
+            ));
+            info.device_context_baa.as_mut().expect("").entries[0] = without_interrupts(|| {
+                crate::PAGE_TABLE.read().translate_addr(VirtAddr::from_ptr(
+                    info.scratchpads.as_ref().expect("").as_ref() as *const ScratchPadBufferArray
+                )).expect("mapped")
+            });
+        }
+
 
         // Zero device notification
         self.regs.lock().operational_regs.dnctlr.write(0x0);
@@ -334,15 +373,26 @@ impl XHCI {
         {
             let mut info = self.info.write();
             let hcsparams1 = self.regs.lock().capability_regs.hcs_params[0].read();
-            info.max_port = (hcsparams1 & CAP_HCCPARAMS1_MAX_PORT_MASK >> CAP_HCCPARAMS1_MAX_PORT_SHIFT) as u8;
-            info.max_slot = (hcsparams1 & CAP_HCCPARAMS1_SLOTS_MASK) as u8;
+            info.max_port = (hcsparams1 & CAP_HCSPARAMS1_MAX_PORT_MASK >> CAP_HCSPARAMS1_MAX_PORT_SHIFT) as u8;
+            info.max_slot = (hcsparams1 & CAP_HCSPARAMS1_SLOTS_MASK) as u8;
+            info.page_size = self.regs.lock().operational_regs.page_size.read() << 12;
+            debug!("[XHCI] PageSize = {}", info.page_size);
+            if info.page_size > 4096 {
+                error!("[XHCI] PageSize > 4096 not supported");
+                return Err(());
+            }
+            info.big_context = self.regs.lock().capability_regs.hcc_param1.read() & CAP_HCCPARAMS1_CSZ_MASK != 0;
+            debug!("[XHCI] controller use {} bytes context", if info.big_context { 64 } else { 32 });
+            if info.big_context {
+                error!("[XHCI] 64 bytes context not supported yet");
+            }
         }
 
         // Step 3: Setup opRegs->config
         {
             let info = self.info.read();
             let mut tmp = self.regs.lock().operational_regs.config.read();
-            tmp = (tmp & (!CAP_HCCPARAMS1_SLOTS_MASK)) | (info.max_slot as u32);
+            tmp = (tmp & (!CAP_HCSPARAMS1_SLOTS_MASK)) | (info.max_slot as u32);
             self.regs.lock().operational_regs.config.write(tmp);
             debug!("[XHCI] nmbrSlot= {}, nmbrPorts = {}", info.max_slot, info.max_port);
         }
@@ -366,6 +416,85 @@ impl XHCI {
             CAP_HC_VERSION_MASK) >> CAP_HC_VERSION_SHIFT;
         debug!("[XHCI] Controller with version {:04x}", ver);
 
+        Ok(())
+    }
+
+    pub fn halt(&mut self) -> Result<(), ()> {
+        if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
+            debug!("[XHCI] Halting Controller");
+            let mut tmp = self.regs.lock().operational_regs.command.read();
+            tmp &= !OP_CMD_RUN_STOP_MASK;
+            self.regs.lock().operational_regs.command.write(tmp);
+
+            let wait_target = PIT::current_time() + HALT_TIMEOUT;
+            loop {
+                if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 1 {
+                    break;
+                }
+                if PIT::current_time() > wait_target {
+                    error!("[XHCI] Timedout while halting controller on bus: {}",
+                           self.pci_device.bus_location_str());
+                    return Err(());
+                }
+                sleep(Duration::from_millis(1)).expect("slept");
+            };
+        }
+        Ok(())
+    }
+
+    fn start(&mut self) -> Result<(), ()> {
+        debug!("[XHCI] Starting the controller");
+
+        let mut tmp = self.regs.lock().operational_regs.command.read();
+        tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_HSERR_EN_MASK;
+        tmp &= !OP_CMD_INT_EN_MASK; // DISABLE INTERRUPT
+        self.regs.lock().operational_regs.command.write(tmp);
+
+        let wait_target = PIT::current_time() + HALT_TIMEOUT;
+        loop {
+            if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
+                break;
+            }
+            if PIT::current_time() > wait_target {
+                error!("[XHCI] Timedout while starting controller on bus: {}",
+                       self.pci_device.bus_location_str());
+                return Err(());
+            }
+            sleep(Duration::from_millis(1)).expect("slept");
+        };
+
+        without_interrupts(|| {
+            self.handle_interrupt();
+        });
+        debug!("[XHCI] Finished Initial Int Poll");
+
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> Result<(), ()> {
+        debug!("[XHCI] Resetting Controller!");
+        // Step 1: Halt if needs to
+        self.halt()?;
+
+        let mut tmp = self.regs.lock().operational_regs.command.read();
+        tmp |= OP_CMD_RESET_MASK;
+        self.regs.lock().operational_regs.command.write(tmp);
+
+        let wait_target = PIT::current_time() + RESET_TIMEOUT;
+        loop {
+            let cmd = self.regs.lock().operational_regs.command.read();
+            let sts = self.regs.lock().operational_regs.status.read();
+            if (cmd & OP_CMD_RESET_MASK == 0) &&
+                (sts & OP_STS_CNR_MASK == 0) {
+                break;
+            }
+            if PIT::current_time() > wait_target {
+                error!("[XHCI] Timedout while resetting controller on bus: {}",
+                       self.pci_device.bus_location_str());
+                return Err(());
+            }
+            sleep(Duration::from_millis(1)).expect("slept");
+        }
         Ok(())
     }
 
@@ -397,12 +526,12 @@ impl XHCI {
                 let usb3ports = usb3ports.expect("");
                 for usb2 in usb2ports.0..usb2ports.1 {
                     let mut port2 = self.ports.get(&usb2).expect("port?").lock();
-                    port2.port_type = XHCIPortSpeed::USB2;
+                    port2.port_type = XHCIPortGeneration::USB2;
                     let offset = usb2 - usb2ports.0;
                     let usb3 = usb3ports.0 + offset;
                     if usb3 < usb3ports.1 {
                         let mut port3 = self.ports.get(&usb3).expect("matching port").lock();
-                        port3.port_type = XHCIPortSpeed::USB3;
+                        port3.port_type = XHCIPortGeneration::USB3;
                         port3.matching_port = Some(usb2);
                         port2.matching_port = Some(usb3);
                     }
@@ -505,7 +634,8 @@ impl XHCI {
     }
 
     fn wait_command_complete(&self, ptr: u64) -> Option<CommandCompletionTRB> {
-        self.regs.try_lock().expect("").get_doorbell_regster(0).reg.write(0);
+        // TODO update this code to use interrupt notification system
+        self.regs.lock().get_doorbell_regster(0).reg.write(0);
         let timeout = Duration::from_millis(1000) + PIT::current_time();
         loop {
             let pop = self.info.write().event_ring.as_mut().expect("").pop(false);
@@ -536,7 +666,7 @@ impl XHCI {
         }
     }
 
-    fn poll_port_status(&self, port_id: u8) {
+    fn is_port_connected(&self, port_id: u8) -> bool {
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
         let port_status = port_op.portsc.read();
         let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
@@ -544,22 +674,103 @@ impl XHCI {
         port_op.portsc.write(tmp);
 
         // Check if a port is in it's ready state
+        let ready_mask = OP_PORT_STATUS_CCS_MASK;
+        port_op.portsc.read() & ready_mask == ready_mask
+    }
+
+    fn reset_port(&self, port_id: u8) {
+        let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
+        let port_status = port_op.portsc.read();
+        let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
+        tmp |= OP_PORT_STATUS_RESET_MASK | OP_PORT_STATUS_PRC_MASK;
+        port_op.portsc.write(tmp);
+        let timeout = PORT_RESET_TIMEOUT + PIT::current_time();
+        loop {
+            sleep(Duration::from_millis(10)).expect("");
+            let val = port_op.portsc.read();
+            if val & OP_PORT_STATUS_RESET_MASK != 0 {
+                if val & OP_PORT_STATUS_PRC_MASK != 0 {
+                    let mut tmp = val & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
+                    tmp |= OP_PORT_STATUS_RESET_MASK | OP_PORT_STATUS_PRC_MASK;
+                    port_op.portsc.write(tmp);
+                    break;
+                }
+                debug!("[XHCI] Port reset but no change");
+            }
+            if PIT::current_time() > timeout {
+                error!("Failed to reset port {}", port_id);
+                return;
+            }
+        }
+        debug!("[XHCI] port {} reset", port_id);
+    }
+
+    fn poll_port_status(&self, port_id: u8) {
+        let ready = self.is_port_connected(port_id);
         let port_wrapper = self.ports.get(&port_id).cloned().expect("thing");
         let mut port = port_wrapper.lock();
-        let ready_mask = OP_PORT_STATUS_CCS_MASK | OP_PORT_STATUS_PED_MASK;
-        let ready = port_op.portsc.read() & ready_mask == ready_mask;
         match port.status {
-            XHCIPortStatus::Active => {
+            XHCIPortStatus::Active |
+            XHCIPortStatus::InactiveUSB3CompanionPort => {
                 if !ready {
                     port.status = XHCIPortStatus::Disconnected;
                     // Perform Disconnection etc
+                    debug!("[XHCI] Port {} disconnected", port_id);
                 }
             }
             _ => {
                 if ready {
                     port.status = XHCIPortStatus::Connected;
+                    if let XHCIPortGeneration::USB2 = port.port_type {
+                        if let Some(usb3) = port.matching_port {
+                            if self.is_port_connected(usb3) {
+                                // Don't activate usb2 if usb3 present;
+                                port.status = XHCIPortStatus::InactiveUSB3CompanionPort;
+                                debug!("[XHCI] Marking port {} as disabled companion for {}", port_id, usb3);
+                                return;
+                            }
+                        }
+                    }
                     debug!("[XHCI] Port {} connected", port_id);
-                    // self.send_slot_enable();
+                    debug!("[XHCI] Resetting port {}", port_id);
+                    self.reset_port(port_id);
+                    match self.send_slot_enable(port.deref_mut()) {
+                        Some(en) => {
+                            let slot = en.slot as usize;
+                            assert_ne!(slot, 0, "invalid slot 0 received");
+                            assert!(self.info.read().device_contexts[slot - 1].is_none(), "slot double alloc");
+                            let mut dev_ctx = Box::new(DeviceContextArray::default());
+                            let ctx_ptr = without_interrupts(|| {
+                                crate::PAGE_TABLE.read().translate_addr(
+                                    VirtAddr::from_ptr(dev_ctx.deref() as *const DeviceContextArray)
+                                ).expect("")
+                            });
+
+                            // Setup Slot Context
+                            let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
+                            let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> SLOT_CTX_SPEED_SHIFT) as u8;
+                            dev_ctx.slot.set_speed(speed);
+                            dev_ctx.slot.set_context_entries(1); // TODO Maybe not hardcode 1?
+                            dev_ctx.slot.root_hub_port_number = port_id;
+
+                            // Setup first EP Slot
+                            let epctx = &mut dev_ctx.endpoint[0];
+                            epctx.set_lsa_bit(); // Disable Streams
+                            epctx.set_cerr(3); // Max value (2 bit only)
+                            epctx.set_ep_type(EP_TYPE_CONTROL_BIDIR);
+                            debug!("[XHCI] Port: {}, speed {}", port_id, speed);
+
+                            // Activate Entry
+                            self.info.write().device_contexts[slot - 1] = Some(dev_ctx);
+                            self.info.write().device_context_baa.as_mut().expect("").entries[slot] = ctx_ptr;
+                            debug!("[XHCI] Slot {} allocated", slot);
+                        }
+                        None => {
+                            warn!("[XHCI] Failed to enable port {}", port_id);
+                        }
+                    }
+
+                    port.status = XHCIPortStatus::Active;
                     // Reset Port
                 } else {
                     port.status = XHCIPortStatus::Disconnected;
@@ -568,94 +779,23 @@ impl XHCI {
         }
     }
 
-    pub fn send_slot_enable(&self) {
+    pub fn send_slot_enable(&self, port: &mut XHCIPort) -> Option<CommandCompletionTRB> {
         let cmd = CommandTRB::enable_slot();
-        let ptr = self.info.write().command_ring.as_mut()
+        let ptr = self.info.try_write().expect("lock fuck").command_ring.as_mut()
             .expect("no cmd ring found").push(cmd.into()).as_u64();
         debug!("[XHCI] Sending Slot EN");
-        self.regs.lock().get_doorbell_regster(0).reg.write(0); // Ring CMD Doorbell
+        let lol = self.wait_command_complete(ptr);
+        debug!("[XHCI] Command Complete: {:?}", lol);
+        lol
     }
 
-    pub fn poll_ports(&self) {}
-
-    pub fn halt(&mut self) -> Result<(), ()> {
-        if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
-            debug!("[XHCI] Halting Controller");
-            let mut tmp = self.regs.lock().operational_regs.command.read();
-            tmp &= !OP_CMD_RUN_STOP_MASK;
-            self.regs.lock().operational_regs.command.write(tmp);
-
-            let wait_target = PIT::current_time() + HALT_TIMEOUT;
-            loop {
-                if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 1 {
-                    break;
-                }
-                if PIT::current_time() > wait_target {
-                    error!("[XHCI] Timedout while halting controller on bus: {}",
-                           self.pci_device.bus_location_str());
-                    return Err(());
-                }
-                sleep(Duration::from_millis(1)).expect("slept");
-            };
+    pub fn poll_ports(&self) {
+        let max_port = self.info.read().max_port;
+        for port in 1..=max_port {
+            self.poll_port_status(port);
         }
-        Ok(())
     }
 
-    fn start(&mut self) -> Result<(), ()> {
-        debug!("[XHCI] Starting the controller");
-
-        let mut tmp = self.regs.lock().operational_regs.command.read();
-        tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_HSERR_EN_MASK;
-        tmp &= !OP_CMD_INT_EN_MASK; // DISABLE INTERRUPT
-        self.regs.lock().operational_regs.command.write(tmp);
-
-        let wait_target = PIT::current_time() + HALT_TIMEOUT;
-        loop {
-            if self.regs.lock().operational_regs.status.read() & OP_STS_HLT_MASK == 0 {
-                break;
-            }
-            if PIT::current_time() > wait_target {
-                error!("[XHCI] Timedout while starting controller on bus: {}",
-                       self.pci_device.bus_location_str());
-                return Err(());
-            }
-            sleep(Duration::from_millis(1)).expect("slept");
-        };
-
-        without_interrupts(|| {
-            self.handle_interrupt();
-        });
-        debug!("[XHCI] Finished Initial Int Poll");
-
-        Ok(())
-    }
-
-    pub fn reset(&mut self) -> Result<(), ()> {
-        debug!("[XHCI] Resetting Controller!");
-        // Step 1: Halt if needs to
-        self.halt()?;
-
-        let mut tmp = self.regs.lock().operational_regs.command.read();
-        tmp |= OP_CMD_RESET_MASK;
-        self.regs.lock().operational_regs.command.write(tmp);
-
-        let wait_target = PIT::current_time() + RESET_TIMEOUT;
-        loop {
-            let cmd = self.regs.lock().operational_regs.command.read();
-            let sts = self.regs.lock().operational_regs.status.read();
-            if (cmd & OP_CMD_RESET_MASK == 0) &&
-                (sts & OP_STS_CNR_MASK == 0) {
-                break;
-            }
-            if PIT::current_time() > wait_target {
-                error!("[XHCI] Timedout while resetting controller on bus: {}",
-                       self.pci_device.bus_location_str());
-                return Err(());
-            }
-            sleep(Duration::from_millis(1)).expect("slept");
-        }
-        Ok(())
-    }
 
     pub fn send_nop(&self) {
         let ptr = {

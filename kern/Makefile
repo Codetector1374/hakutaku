@@ -9,7 +9,7 @@ QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
 						 -device qemu-xhci \
 						 -drive id=main_disk,file=ext/demo.img,if=none \
 						 -device ide-hd,drive=main_disk \
-#						 --trace events=./qemu_trace
+						 --trace events=./qemu_trace
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg

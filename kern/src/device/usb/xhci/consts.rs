@@ -9,10 +9,17 @@ pub const USB_INTEL_USB3PRM: u8 = 0xDC;
 /* ----- XHCI Capability Register Fields ------- */
 pub const CAP_HC_VERSION_SHIFT: u32 = 16;
 pub const CAP_HC_VERSION_MASK: u32 = 0xFFFF_0000;
-pub const CAP_HCCPARAMS1_MAX_PORT_SHIFT: u32 = 24;
-pub const CAP_HCCPARAMS1_MAX_PORT_MASK: u32 = 0xFF00_0000;
-pub const CAP_HCCPARAMS1_SLOTS_SHIFT: u32 = 0;
-pub const CAP_HCCPARAMS1_SLOTS_MASK: u32 = 0x0000_00FF;
+
+pub const CAP_HCSPARAMS1_MAX_PORT_SHIFT: u32 = 24;
+pub const CAP_HCSPARAMS1_MAX_PORT_MASK: u32 = 0xFF00_0000;
+pub const CAP_HCSPARAMS1_SLOTS_SHIFT: u32 = 0;
+pub const CAP_HCSPARAMS1_SLOTS_MASK: u32 = 0x0000_00FF;
+pub const CAP_HCCPARAMS1_CSZ_MASK: u32 = 0x1 << 2;
+
+pub const CAP_HCSPARAMS2_MAX_SCRATCH_H_SHIFT: u32 = 21;
+pub const CAP_HCSPARAMS2_MAX_SCRATCH_H_MSAK: u32 = 0x1F << CAP_HCSPARAMS2_MAX_SCRATCH_H_SHIFT;
+pub const CAP_HCSPARAMS2_MAX_SCRATCH_L_SHIFT: u32 = 27;
+pub const CAP_HCSPARAMS2_MAX_SCRATCH_L_MSAK: u32 = 0x1F << CAP_HCSPARAMS2_MAX_SCRATCH_L_SHIFT;
 
 pub const CAP_DBOFFSET_MASK: u32 = 0xFFFF_FFFC;
 // Bit 1:0 reserved
@@ -57,6 +64,11 @@ pub const OP_PORT_STATUS_WRC_SHIFT: u32 = 19;
 pub const OP_PORT_STATUS_WRC_MASK: u32 = 1 << OP_PORT_STATUS_WRC_SHIFT;
 pub const OP_PORT_STATUS_OCC_SHIFT: u32 = 20;
 pub const OP_PORT_STATUS_OCC_MASK: u32 = 1 << OP_PORT_STATUS_OCC_SHIFT;
+pub const OP_PORT_STATUS_PRC_SHIFT: u32 = 21;
+pub const OP_PORT_STATUS_PRC_MASK: u32 = 1 << OP_PORT_STATUS_WRC_SHIFT;
+pub const OP_PORT_STATUS_SPEED_SHIFT: u32 = 10;
+pub const OP_PORT_STATUS_SPEED_MASK: u32 = 0xF << OP_PORT_STATUS_SPEED_SHIFT;
+pub const OP_PORT_STATUS_RESET_MASK: u32 = 0x1 << 4;
 
 pub const INT_IRQ_FLAG_INT_PENDING_MASK: u32 = 0x1;
 pub const INT_IRQ_FLAG_INT_EN_MASK: u32 = 0x2;
@@ -104,4 +116,25 @@ pub const TRBS_PER_SEGMENT: usize = 256;
 /* --------- TIMEOUT Constants ----------------- */
 pub const HALT_TIMEOUT: Duration = Duration::from_millis(16);
 pub const RESET_TIMEOUT: Duration = Duration::from_millis(250);
+pub const PORT_RESET_TIMEOUT: Duration = Duration::from_millis(1000);
 
+/* ------------- XHCI Slot Context -------------- */
+pub const SLOT_CTX_SPEED_SHIFT: u32 = 20;
+pub const SLOT_CTX_SPEED_MASK: u32 = 0xF << SLOT_CTX_SPEED_SHIFT;
+pub const SLOT_CTX_ENTRYS_SHIFT: u32 = 27;
+pub const SLOT_CTX_ENTRYS_MASK: u32 = 0x1F << SLOT_CTX_ENTRYS_SHIFT;
+/* ------------- XHCI EP Context --------------- */
+pub const EP_CTX_LSA_MASK: u32 = 0x1 << 15;
+pub const EP_CTX_CERR_SHIFT: u32 = 1;
+pub const EP_CTX_CERR_MASK: u32 = 0b11 << EP_CTX_CERR_SHIFT;
+pub const EP_CTX_EPTYPE_SHIFT: u32 = 3;
+pub const EP_CTX_EPTYPE_MASK: u32 = 0b111 << EP_CTX_EPTYPE_SHIFT;
+
+pub const EP_TYPE_NOT_VALID: u8 = 0;
+pub const EP_TYPE_ISOCH_OUT: u8 = 1;
+pub const EP_TYPE_BULK_OUT: u8 = 2;
+pub const EP_TYPE_INTERRUPT_OUT: u8 = 3;
+pub const EP_TYPE_CONTROL_BIDIR: u8 = 4;
+pub const EP_TYPE_ISOCH_IN: u8 = 5;
+pub const EP_TYPE_BULK_IN: u8 = 6;
+pub const EP_TYPE_INTERRUPT_IN: u8 = 7;

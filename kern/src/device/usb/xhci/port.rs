@@ -13,7 +13,7 @@ pub struct XHCIPortOperationalRegisters {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum XHCIPortSpeed {
+pub enum XHCIPortGeneration {
     Unknown,
     USB2,
     USB3,
@@ -24,6 +24,7 @@ pub enum XHCIPortStatus {
     Disconnected,
     Connected,
     Active,
+    InactiveUSB3CompanionPort,
 }
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ pub struct XHCIPort {
     pub controller_id: usize,
     pub port_id: u8,
     pub matching_port: Option<u8>,
-    pub port_type: XHCIPortSpeed,
+    pub port_type: XHCIPortGeneration,
     pub status: XHCIPortStatus,
 }
 
@@ -41,7 +42,7 @@ impl XHCIPort {
             controller_id: controller,
             port_id: port,
             matching_port: None,
-            port_type: XHCIPortSpeed::Unknown,
+            port_type: XHCIPortGeneration::Unknown,
             status: XHCIPortStatus::Disconnected
         }
     }

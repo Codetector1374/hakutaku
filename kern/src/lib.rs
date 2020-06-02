@@ -8,6 +8,7 @@
 #![allow(unused_imports, dead_code)]
 #![allow(deprecated)]
 #![feature(const_in_array_repeat_expressions)]
+#![feature(allocator_api)]
 
 use core::fmt::Write;
 use core::cmp::max;
@@ -211,9 +212,7 @@ pub extern fn usb_process() -> ! {
     }
 
     loop {
-        // without_interrupts(||{
-        //     G_USB.xhci.lock().as_mut().expect("has xhci").poll_ports();
-        // });
+        // G_USB.xhci.read().as_ref().expect("has xhci").poll_ports();
         sleep(Duration::from_millis(100)).unwrap();
     }
 }

@@ -135,6 +135,9 @@ impl XHCIRing {
     pub fn pop(&mut self, has_link: bool) -> Option<TRB> {
         // TODO: Check Cycle State
         let trb = self.segments[self.dequeue.0].trbs[self.dequeue.1].clone();
+        if trb.get_cycle_state() != self.cycle_state as u8 {
+            return None;
+        }
         if self.dequeue.1 < (TRBS_PER_SEGMENT - (if has_link { 2 } else { 1 })) {
             self.dequeue.1 += 1;
         } else {
@@ -143,6 +146,7 @@ impl XHCIRing {
                 self.dequeue.0 += 1;
             } else {
                 self.dequeue.0 = 0;
+                self.cycle_state = if self.cycle_state == 0 { 1 } else { 0 };
             }
         }
         Some(trb)
@@ -193,11 +197,13 @@ impl XHCIRingSegment {
 }
 
 /* --------------------------- TRBs --------------------------- */
+#[derive(Debug)]
 pub enum TRBType {
     Unknown(TRB),
     Link(LinkTRB),
     PortStatusChange(PortStatusChangeTRB),
     CommandCompletion(CommandCompletionTRB),
+    HostControllerEvent(HostControllerEventTRB),
 }
 
 impl From<TRB> for TRBType {
@@ -207,6 +213,7 @@ impl From<TRB> for TRBType {
             TRB_TYPE_LINK => Link(unsafe { t.link }),
             TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe {t.port_status_change}),
             TRB_TYPE_EVNT_CMD_COMPLETE => CommandCompletion(unsafe {t.command_completion}),
+            TRB_TYPE_EVNT_HC => HostControllerEvent(unsafe {t.host_controller_event}),
             _ => TRBType::Unknown(t),
         }
     }
@@ -220,9 +227,16 @@ pub union TRB {
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
     pub command_completion: CommandCompletionTRB,
+    pub host_controller_event: HostControllerEventTRB,
     pseudo: PseudoTRB,
 }
 const_assert_size!(TRB, 16);
+
+impl Debug for TRB {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Generic TRB with type={}", self.type_id())
+    }
+}
 
 impl TRB {
     pub fn set_cycle_state(&mut self, val: u8) {
@@ -230,6 +244,10 @@ impl TRB {
         tmp &= !TRB_COMMON_CYCLE_STATE_MASK;
         tmp |= (val as u16) & TRB_COMMON_CYCLE_STATE_MASK;
         self.pseudo.flags = tmp
+    }
+
+    pub fn get_cycle_state(&self) -> u8 {
+        (unsafe {self.pseudo.flags} & TRB_COMMON_CYCLE_STATE_MASK) as u8
     }
 
     pub fn get_type(&self) -> u16 {
@@ -252,7 +270,7 @@ impl Default for TRB {
 }
 /* ------------ Event TRBs -------- */
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PortStatusChangeTRB {
     _res0: [u8; 3],
     pub port_id: u8,
@@ -264,7 +282,16 @@ pub struct PortStatusChangeTRB {
 const_assert_size!(PortStatusChangeTRB, 16);
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
+pub struct HostControllerEventTRB {
+    _res: [u8; 11],
+    complete_code: u8,
+    flags: u16,
+    _res1: u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
 pub struct CommandCompletionTRB {
     pub trb_pointer: u64,
     pub params: [u8; 3],
@@ -276,7 +303,7 @@ pub struct CommandCompletionTRB {
 
 /* ------------ Pseudo TRB -------- */
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PseudoTRB {
     _res0: [u32; 3],
     flags: u16,
@@ -294,7 +321,7 @@ impl Default for PseudoTRB {
 
 /* -------- Link TRB -------------- */
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct LinkTRB {
     pub next_trb: PhysAddr,
     _res0: [u8; 3],

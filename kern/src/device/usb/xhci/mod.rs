@@ -28,6 +28,7 @@ use self::registers::*;
 use hashbrown::HashMap;
 use alloc::sync::Arc;
 use crate::device::ahci::structures::CommandTable;
+use x86_64::instructions::tlb::flush_all;
 
 pub mod extended_capability;
 pub mod port;
@@ -358,7 +359,7 @@ impl XHCI {
         // Clear Interrupt Ctrl / Pending
         self.regs.lock()
             .get_runtime_interrupt_register(0)
-            .iman.write(INT_IRQ_FLAG_INT_PENDING_MASK | INT_IRQ_FLAG_INT_EN_MASK);
+            .iman.write(INT_IRQ_FLAG_INT_PENDING_MASK);
         self.regs.lock().get_runtime_interrupt_register(0).imod.write(0);
 
         let ver = (self.regs.lock().capability_regs.length_and_ver.read() &
@@ -503,6 +504,38 @@ impl XHCI {
         }
     }
 
+    fn wait_command_complete(&self, ptr: u64) -> Option<CommandCompletionTRB> {
+        self.regs.try_lock().expect("").get_doorbell_regster(0).reg.write(0);
+        let timeout = Duration::from_millis(1000) + PIT::current_time();
+        loop {
+            let pop = self.info.write().event_ring.as_mut().expect("").pop(false);
+            match pop {
+                Some(trb) => {
+                    let tmp = self.info.read().event_ring.as_ref().expect("").dequeue_pointer().as_u64() |
+                        INT_ERDP_BUSY_MASK | (INT_ERDP_DESI_MASK & self.info.read().event_ring.as_ref().expect("").dequeue.0 as u64);
+                    self.regs.lock().get_runtime_interrupt_register(0).event_ring_deque_ptr.write(tmp);
+                    let lol = TRBType::from(trb);
+                    match lol {
+                        TRBType::CommandCompletion(ctrb) => {
+                            if ctrb.trb_pointer == ptr {
+                                return Some(ctrb);
+                            }
+                            debug!("[XHCI] Got unexpected Complete TRB {:#x}", ctrb.trb_pointer);
+                        }
+                        _ => {
+                            debug!("[XHCI] Got unexpected TRB\n {:?}", &lol);
+                        }
+                    }
+                }
+                None => {}
+            }
+            if PIT::current_time() > timeout {
+                return None;
+            }
+            sleep(Duration::from_millis(10)).expect("slept");
+        }
+    }
+
     fn poll_port_status(&self, port_id: u8) {
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
         let port_status = port_op.portsc.read();
@@ -572,7 +605,8 @@ impl XHCI {
         debug!("[XHCI] Starting the controller");
 
         let mut tmp = self.regs.lock().operational_regs.command.read();
-        tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_INT_EN_MASK | OP_CMD_HSERR_EN_MASK;
+        tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_HSERR_EN_MASK;
+        tmp &= !OP_CMD_INT_EN_MASK; // DISABLE INTERRUPT
         self.regs.lock().operational_regs.command.write(tmp);
 
         let wait_target = PIT::current_time() + HALT_TIMEOUT;
@@ -624,15 +658,14 @@ impl XHCI {
     }
 
     pub fn send_nop(&self) {
-        {
+        let ptr = {
             let mut info = self.info.write();
             let cmd_ring = info.command_ring.as_mut().expect("uninitialized");
             debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
-            cmd_ring.push(CommandTRB::new_noop().into()).as_u64();
-        }
-        without_interrupts(|| {
-            self.regs.lock().get_doorbell_regster(0).reg.write(0);
-        });
+            cmd_ring.push(CommandTRB::new_noop().into()).as_u64()
+        };
+        self.wait_command_complete(ptr).expect("thing");
+        debug!("NoOP Complete at {:#x}", ptr);
     }
 
     pub fn extended_capability(&self) -> ExtendedCapabilityTags {

@@ -362,7 +362,7 @@ impl Debug for CommandTRB {
 }
 
 impl CommandTRB {
-    pub fn new_noop() -> Self {
+    pub fn noop() -> Self {
         let mut trb = Self::default();
         trb.payload[3] |= (TRB_TYPE_NOOP_COMMAND as u32) << (TRB_COMMON_TYPE_SHIFT as u32);
         trb
@@ -371,6 +371,16 @@ impl CommandTRB {
     pub fn enable_slot() -> Self {
         let mut trb = Self::default();
         trb.payload[3] |= (TRB_TYPE_ENABLE_SLOT_CMD as u32) << (TRB_COMMON_TYPE_SHIFT as u32);
+        trb
+    }
+
+    pub fn address_device(slot: u8, context_ptr: PhysAddr) -> Self {
+        let mut trb = Self::default();
+        trb.payload[3] |= (TRB_TYPE_ADDRESS_DEVICE_CMD as u32) << TRB_COMMON_TYPE_SHIFT as u32;
+        assert_eq!(context_ptr.as_u64() & 0b1111, 0, "alignment");
+        trb.payload[0] = context_ptr.as_u64() as u32;
+        trb.payload[1] = (context_ptr.as_u64() >> 32) as u32;
+        trb.payload[3] |= (slot as u32) << 24;
         trb
     }
 }
@@ -407,7 +417,14 @@ const_assert_size!(SetupStageTRB, 16);
 /* ------------- Device Context ------------- */
 
 #[repr(C, align(2048))]
-#[derive(Default)]
+pub struct InputContext {
+    pub input: [u32; 8],
+    pub slot: SlotContext,
+    pub endpoint: [EndpointContext; 31],
+}
+
+#[repr(C, align(2048))]
+#[derive(Default, Clone)]
 pub struct DeviceContextArray {
     pub slot: SlotContext,
     pub endpoint: [EndpointContext; 31],
@@ -415,13 +432,13 @@ pub struct DeviceContextArray {
 
 macro_rules! set_field {
     ($var: expr, $shift: expr, $mask: expr, $val: expr) => {{
-        let tmp = $var & !$mask;
-        $var = tmp | (($val.checked_shl($shift).unwrap_or(0)) & $mask);
+        let tmp = $var & (!$mask);
+        $var = tmp | (($val << $shift) & $mask);
     }};
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct EndpointContext {
     dword1: u32,
     pub flags1: u8,
@@ -439,22 +456,22 @@ impl EndpointContext {
     }
 
     pub fn set_cerr(&mut self, val: u8) {
-        set_field!(self.dword1,
+        set_field!(self.flags1,
             EP_CTX_CERR_SHIFT, EP_CTX_CERR_MASK,
-            val as u32
+            val
         );
     }
 
     pub fn set_ep_type(&mut self, val: u8) {
-        set_field!(self.dword1,
+        set_field!(self.flags1,
             EP_CTX_EPTYPE_SHIFT, EP_CTX_EPTYPE_MASK,
-            val as u32
+            val
         );
     }
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SlotContext {
     // DWORD1
     pub dword1: u32,

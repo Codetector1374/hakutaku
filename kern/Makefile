@@ -4,6 +4,7 @@ target ?= $(arch)-unknown-none
 iso := build/os-$(arch).iso
 rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
+QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
 						 -boot order=d \
 						 -device qemu-xhci \
@@ -37,14 +38,14 @@ clean:
 	@rm -rf build
 
 usb: $(iso)
-	@qemu-system-x86_64 $(QEMU_ARGS) -drive id=my_usb_disk,file=./ext/demo_usb.img,if=none \
+	@$(QEMU) $(QEMU_ARGS) -drive id=my_usb_disk,file=./ext/demo_usb.img,if=none \
 				    -device usb-storage,drive=my_usb_disk,id=usb0
 
 run: $(iso)
-	@qemu-system-x86_64 $(QEMU_ARGS)
+	@$(QEMU) $(QEMU_ARGS)
 
 gdb: $(iso)
-	@qemu-system-x86_64 -s -S $(QEMU_ARGS)
+	@$(QEMU) -s -S $(QEMU_ARGS)
 
 iso: $(iso)
 

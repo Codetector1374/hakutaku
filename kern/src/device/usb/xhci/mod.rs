@@ -83,6 +83,7 @@ pub struct XHCIInfo {
     big_context: bool,
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     device_contexts: [Option<Box<DeviceContextArray>>; 255],
+    transfer_rings: [Option<XHCIRing>; 255],
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
@@ -98,6 +99,7 @@ impl Default for XHCIInfo {
             big_context: false,
             device_context_baa: None,
             device_contexts: [None; 255],
+            transfer_rings: [None; 255],
             command_ring: None,
             event_ring: None,
             event_ring_table: None,
@@ -757,6 +759,14 @@ impl XHCI {
                                 ).expect("")
                             });
 
+                            let transfer_ring = XHCIRing::new_with_capacity(1, true);
+                            let transfer_ring_ptr = without_interrupts(|| {
+                                crate::PAGE_TABLE.read().translate_addr(
+                                    VirtAddr::from_ptr(transfer_ring.segments[0].as_ref() as *const XHCIRingSegment)
+                                ).expect("")
+                            }).as_u64();
+                            assert_eq!(transfer_ring_ptr & 0b1111, 0, "alignment");
+
                             // Setup Slot Context
                             let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
                             let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> OP_PORT_STATUS_SPEED_SHIFT) as u8;
@@ -770,17 +780,42 @@ impl XHCI {
                             epctx.set_cerr(3); // Max value (2 bit only)
                             epctx.set_ep_type(EP_TYPE_CONTROL_BIDIR);
                             epctx.max_packet_size = match speed {
+                                0 => {
+                                    error!("[XHCI] unknown device speed on port {}", port_id);
+                                    64
+                                }
                                 OP_PORT_STATUS_SPEED_LOW => 8,
                                 OP_PORT_STATUS_SPEED_FULL |
                                 OP_PORT_STATUS_SPEED_HIGH => 64,
                                 _ => 512,
                             };
+                            epctx.average_trb_len = 8;
+                            epctx.dequeu_pointer = transfer_ring_ptr | 0x1; // Cycle Bit
                             debug!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
 
+                            let mut input_ctx = Box::new(InputContext{
+                                input: Default::default(),
+                                slot: dev_ctx.slot.clone(),
+                                endpoint: dev_ctx.endpoint.clone(),
+                            });
+                            input_ctx.input[1] = 0b11;
+                            let input_ctx_ptr = without_interrupts(|| {
+                                crate::PAGE_TABLE.read().translate_addr(
+                                    VirtAddr::from_ptr(input_ctx.deref() as *const InputContext)
+                                ).expect("")
+                            });
                             // Activate Entry
                             self.info.write().device_contexts[slot - 1] = Some(dev_ctx);
                             self.info.write().device_context_baa.as_mut().expect("").entries[slot] = ctx_ptr;
-                            debug!("[XHCI] Slot {} allocated", slot);
+                            self.info.write().transfer_rings[slot - 1] = Some(transfer_ring);
+
+
+                            let ptr = self.info.write().command_ring.as_mut().expect("").push(
+                                TRB { command: CommandTRB::address_device(slot as u8, input_ctx_ptr) }
+                            ).as_u64();
+                            let result = self.wait_command_complete(ptr);
+                            core::mem::drop(input_ctx); // Don't early drop
+                            debug!("[XHCI] Slot {} configured: {:?}", slot, result);
                         }
                         None => {
                             warn!("[XHCI] Failed to enable port {}", port_id);
@@ -819,7 +854,7 @@ impl XHCI {
             let mut info = self.info.write();
             let cmd_ring = info.command_ring.as_mut().expect("uninitialized");
             debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
-            cmd_ring.push(CommandTRB::new_noop().into()).as_u64()
+            cmd_ring.push(CommandTRB::noop().into()).as_u64()
         };
         self.wait_command_complete(ptr).expect("thing");
         debug!("NoOP Complete at {:#x}", ptr);

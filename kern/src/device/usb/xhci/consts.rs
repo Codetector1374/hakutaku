@@ -73,13 +73,13 @@ pub const OP_PORT_STATUS_SPEED_MASK: u32 = 0xF << OP_PORT_STATUS_SPEED_SHIFT;
 pub const OP_PORT_STATUS_RESET_MASK: u32 = 0x1 << 4;
 pub const OP_PORT_STATUS_POWER_MASK: u32 = 1 << 9;
 
-pub const OP_PORT_STATUS_SPEED_FULL: u32 = 1;
-pub const OP_PORT_STATUS_SPEED_LOW: u32 = 2;
-pub const OP_PORT_STATUS_SPEED_HIGH: u32 = 3;
-pub const OP_PORT_STATUS_SPEED_SUPER_G1: u32 = 4;
-pub const OP_PORT_STATUS_SPEED_SUPER_G2: u32 = 5;
-pub const OP_PORT_STATUS_SPEED_SUPER_G1X2: u32 = 6;
-pub const OP_PORT_STATUS_SPEED_SUPER_G2X2: u32 = 7;
+pub const OP_PORT_STATUS_SPEED_FULL: u8 = 1;
+pub const OP_PORT_STATUS_SPEED_LOW: u8 = 2;
+pub const OP_PORT_STATUS_SPEED_HIGH: u8 = 3;
+pub const OP_PORT_STATUS_SPEED_SUPER_G1: u8 = 4;
+pub const OP_PORT_STATUS_SPEED_SUPER_G2: u8 = 5;
+pub const OP_PORT_STATUS_SPEED_SUPER_G1X2: u8 = 6;
+pub const OP_PORT_STATUS_SPEED_SUPER_G2X2: u8 = 7;
 
 pub const INT_IRQ_FLAG_INT_PENDING_MASK: u32 = 0x1;
 pub const INT_IRQ_FLAG_INT_EN_MASK: u32 = 0x2;
@@ -136,10 +136,10 @@ pub const SLOT_CTX_ENTRYS_SHIFT: u32 = 27;
 pub const SLOT_CTX_ENTRYS_MASK: u32 = 0x1F << SLOT_CTX_ENTRYS_SHIFT;
 /* ------------- XHCI EP Context --------------- */
 pub const EP_CTX_LSA_MASK: u32 = 0x1 << 15;
-pub const EP_CTX_CERR_SHIFT: u32 = 1;
-pub const EP_CTX_CERR_MASK: u32 = 0b11 << EP_CTX_CERR_SHIFT;
-pub const EP_CTX_EPTYPE_SHIFT: u32 = 3;
-pub const EP_CTX_EPTYPE_MASK: u32 = 0b111 << EP_CTX_EPTYPE_SHIFT;
+pub const EP_CTX_CERR_SHIFT: u8 = 1;
+pub const EP_CTX_CERR_MASK: u8 = 0b11 << EP_CTX_CERR_SHIFT;
+pub const EP_CTX_EPTYPE_SHIFT: u8 = 3;
+pub const EP_CTX_EPTYPE_MASK: u8 = 0b111 << EP_CTX_EPTYPE_SHIFT;
 
 pub const EP_TYPE_NOT_VALID: u8 = 0;
 pub const EP_TYPE_ISOCH_OUT: u8 = 1;

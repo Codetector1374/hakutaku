@@ -120,6 +120,7 @@ pub struct XHCICapabilityRegisters {
     hcc_param1: ReadOnly<u32>,
     doorbell_offset: ReadOnly<u32>,
     rts_offset: ReadOnly<u32>,
+    hcc_param2: ReadOnly<u32>,
 }
 
 #[derive(Debug)]
@@ -373,7 +374,8 @@ impl XHCI {
         {
             let mut info = self.info.write();
             let hcsparams1 = self.regs.lock().capability_regs.hcs_params[0].read();
-            info.max_port = (hcsparams1 & CAP_HCSPARAMS1_MAX_PORT_MASK >> CAP_HCSPARAMS1_MAX_PORT_SHIFT) as u8;
+            debug!("[XHCI] HCS1: {:#x}", hcsparams1);
+            info.max_port = ((hcsparams1 & CAP_HCSPARAMS1_MAX_PORT_MASK) >> CAP_HCSPARAMS1_MAX_PORT_SHIFT) as u8;
             info.max_slot = (hcsparams1 & CAP_HCSPARAMS1_SLOTS_MASK) as u8;
             info.page_size = self.regs.lock().operational_regs.page_size.read() << 12;
             debug!("[XHCI] PageSize = {}", info.page_size);
@@ -385,6 +387,11 @@ impl XHCI {
             debug!("[XHCI] controller use {} bytes context", if info.big_context { 64 } else { 32 });
             if info.big_context {
                 error!("[XHCI] 64 bytes context not supported yet");
+            }
+
+            let hccparams1 = self.regs.lock().capability_regs.hcc_param1.read();
+            if hccparams1 & CAP_HCCPARAMS1_PORT_POWER_CTRL_MASK != 0 {
+                info!("[XHCI] Controller Support Power Power");
             }
         }
 
@@ -463,11 +470,6 @@ impl XHCI {
             sleep(Duration::from_millis(1)).expect("slept");
         };
 
-        without_interrupts(|| {
-            self.handle_interrupt();
-        });
-        debug!("[XHCI] Finished Initial Int Poll");
-
         Ok(())
     }
 
@@ -499,11 +501,11 @@ impl XHCI {
     }
 
     fn setup_port_structures(&mut self) {
-        for t in 0..=self.info.read().max_port {
-            let port_num = t + 1; // Port number is 1 based
+        for t in 1..=self.info.read().max_port {
             // TODO: [MultiXHCI] remove the 0 hardcoded controller
-            self.ports.insert(port_num, Arc::new(Mutex::new(XHCIPort::new(0, port_num))));
+            self.ports.insert(t, Arc::new(Mutex::new(XHCIPort::new(0, t))));
         }
+        debug!("[XHCI] Controller has {} ports {} slots", self.info.read().max_port, self.info.read().max_slot);
 
         // Pairs: [begin, end)
         let mut usb2ports: Option<(u8, u8)> = None;
@@ -668,7 +670,16 @@ impl XHCI {
 
     fn is_port_connected(&self, port_id: u8) -> bool {
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
-        let port_status = port_op.portsc.read();
+        let mut port_status = port_op.portsc.read();
+        if port_status & OP_PORT_STATUS_POWER_MASK == 0 {
+            debug!("[XHCI] Port {} not powered. Powering On", port_id);
+            let tmp = (port_status & !OP_PORT_STATUS_PED_MASK) | OP_PORT_STATUS_POWER_MASK;
+            port_op.portsc.write(tmp);
+            while port_op.portsc.read() & OP_PORT_STATUS_POWER_MASK == 0 {}
+            sleep(Duration::from_millis(20)).expect("");
+            port_status = port_op.portsc.read();
+            debug!("[XHCI] port {} powerup complete", port_id);
+        }
         let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
         tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK | OP_PORT_STATUS_WRC_MASK | OP_PORT_STATUS_PEC_MASK;
         port_op.portsc.write(tmp);
@@ -686,12 +697,12 @@ impl XHCI {
         port_op.portsc.write(tmp);
         let timeout = PORT_RESET_TIMEOUT + PIT::current_time();
         loop {
-            sleep(Duration::from_millis(10)).expect("");
+            sleep(Duration::from_millis(200)).expect("");
             let val = port_op.portsc.read();
-            if val & OP_PORT_STATUS_RESET_MASK != 0 {
+            if val & OP_PORT_STATUS_RESET_MASK == 0 {
                 if val & OP_PORT_STATUS_PRC_MASK != 0 {
                     let mut tmp = val & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
-                    tmp |= OP_PORT_STATUS_RESET_MASK | OP_PORT_STATUS_PRC_MASK;
+                    tmp |= OP_PORT_STATUS_PRC_MASK;
                     port_op.portsc.write(tmp);
                     break;
                 }
@@ -732,7 +743,7 @@ impl XHCI {
                         }
                     }
                     debug!("[XHCI] Port {} connected", port_id);
-                    debug!("[XHCI] Resetting port {}", port_id);
+                    // TODO Maybe read speed for usb3 here before reset
                     self.reset_port(port_id);
                     match self.send_slot_enable(port.deref_mut()) {
                         Some(en) => {
@@ -748,7 +759,7 @@ impl XHCI {
 
                             // Setup Slot Context
                             let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
-                            let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> SLOT_CTX_SPEED_SHIFT) as u8;
+                            let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> OP_PORT_STATUS_SPEED_SHIFT) as u8;
                             dev_ctx.slot.set_speed(speed);
                             dev_ctx.slot.set_context_entries(1); // TODO Maybe not hardcode 1?
                             dev_ctx.slot.root_hub_port_number = port_id;
@@ -758,7 +769,13 @@ impl XHCI {
                             epctx.set_lsa_bit(); // Disable Streams
                             epctx.set_cerr(3); // Max value (2 bit only)
                             epctx.set_ep_type(EP_TYPE_CONTROL_BIDIR);
-                            debug!("[XHCI] Port: {}, speed {}", port_id, speed);
+                            epctx.max_packet_size = match speed {
+                                OP_PORT_STATUS_SPEED_LOW => 8,
+                                OP_PORT_STATUS_SPEED_FULL |
+                                OP_PORT_STATUS_SPEED_HIGH => 64,
+                                _ => 512,
+                            };
+                            debug!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
 
                             // Activate Entry
                             self.info.write().device_contexts[slot - 1] = Some(dev_ctx);

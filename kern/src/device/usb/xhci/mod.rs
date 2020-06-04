@@ -669,7 +669,7 @@ impl XHCI {
                     if c.trb_pointer == ptr {
                         return Some(c);
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -688,7 +688,7 @@ impl XHCI {
             debug!("[XHCI] port {} powerup complete", port_id);
         }
         let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
-        tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK | OP_PORT_STATUS_WRC_MASK | OP_PORT_STATUS_PEC_MASK;
+        tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK;
         port_op.portsc.write(tmp);
 
         // Check if a port is in it's ready state
@@ -723,6 +723,79 @@ impl XHCI {
         debug!("[XHCI] port {} reset", port_id);
     }
 
+    fn setup_slot(&self, slot: u8, port_id: u8, max_packet_size: u16, block_cmd: bool) {
+        let slot = slot as usize;
+        let mut dev_ctx = Box::new(DeviceContextArray::default());
+        let ctx_ptr = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(dev_ctx.deref() as *const DeviceContextArray)
+            ).expect("")
+        });
+
+        let transfer_ring = XHCIRing::new_with_capacity(1, true);
+        let transfer_ring_ptr = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(transfer_ring.segments[0].as_ref() as *const XHCIRingSegment)
+            ).expect("")
+        }).as_u64();
+        assert_eq!(transfer_ring_ptr & 0b1111, 0, "alignment");
+        debug!("[XHCI] Setting Transfer Ring Pointer to {:#x}", transfer_ring_ptr);
+
+        // Setup Slot Context
+        let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
+        let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> OP_PORT_STATUS_SPEED_SHIFT) as u8;
+        dev_ctx.slot.dword1.set_speed(speed);
+        dev_ctx.slot.dword1.set_context_entries(1); // TODO Maybe not hardcode 1?
+        dev_ctx.slot.root_hub_port_number = port_id;
+
+        // Setup first EP Slot
+        let epctx = &mut dev_ctx.endpoint[0];
+        epctx.set_lsa_bit(); // Disable Streams
+        epctx.set_cerr(3); // Max value (2 bit only)
+        epctx.set_ep_type(EP_TYPE_CONTROL_BIDIR);
+        if max_packet_size == 0 {
+            epctx.max_packet_size = match speed {
+                0 => {
+                    error!("[XHCI] unknown device speed on port {}", port_id);
+                    64
+                }
+                OP_PORT_STATUS_SPEED_LOW => 8,
+                OP_PORT_STATUS_SPEED_FULL |
+                OP_PORT_STATUS_SPEED_HIGH => 64,
+                _ => 512,
+            };
+        } else {
+            epctx.max_packet_size = max_packet_size;
+        }
+        epctx.average_trb_len = 8;
+        epctx.dequeu_pointer = transfer_ring_ptr | 0x1; // Cycle Bit
+        debug!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
+
+        let mut input_ctx = Box::new(InputContext {
+            input: Default::default(),
+            slot: dev_ctx.slot.clone(),
+            endpoint: dev_ctx.endpoint.clone(),
+        });
+        input_ctx.input[1] = 0b11;
+        let input_ctx_ptr = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(input_ctx.deref() as *const InputContext)
+            ).expect("")
+        });
+        // Activate Entry
+        self.info.write().device_contexts[slot - 1] = Some(dev_ctx);
+        self.info.write().device_context_baa.as_mut().expect("").entries[slot] = ctx_ptr;
+        self.info.write().transfer_rings[slot - 1] = Some(transfer_ring);
+
+
+        let ptr = self.info.write().command_ring.as_mut().expect("").push(
+            TRB { command: CommandTRB::address_device(slot as u8, input_ctx_ptr, block_cmd) }
+        ).as_u64();
+        let result = self.wait_command_complete(ptr);
+        core::mem::drop(input_ctx); // Don't early drop
+        debug!("[XHCI] Slot {} configured: {:?}", slot, result);
+    }
+
     fn poll_port_status(&self, port_id: u8) {
         let ready = self.is_port_connected(port_id);
         let port_wrapper = self.ports.get(&port_id).cloned().expect("thing");
@@ -752,138 +825,69 @@ impl XHCI {
                     debug!("[XHCI] Port {} connected", port_id);
                     // TODO Maybe read speed for usb3 here before reset
                     self.reset_port(port_id);
-                    match self.send_slot_enable() {
-                        Some(en) => {
-                            let slot = en.slot as usize;
-                            assert_ne!(slot, 0, "invalid slot 0 received");
-                            assert!(self.info.read().device_contexts[slot - 1].is_none(), "slot double alloc");
-                            let mut dev_ctx = Box::new(DeviceContextArray::default());
-                            let ctx_ptr = without_interrupts(|| {
-                                crate::PAGE_TABLE.read().translate_addr(
-                                    VirtAddr::from_ptr(dev_ctx.deref() as *const DeviceContextArray)
-                                ).expect("")
-                            });
+                    if let Some(en) = self.send_slot_enable() {
+                        let slot = en.slot as usize;
+                        assert_ne!(slot, 0, "invalid slot 0 received");
+                        self.setup_slot(slot as u8, port_id, 0, true);
+                        // Query Device Descriptor
+                        let mut setup = SetupStageTRB {
+                            request_type: 0x80,
+                            request: 0x6,
+                            value: 0x100,
+                            index: 0,
+                            length: 8,
+                            int_target_trb_length: Default::default(),
+                            metadata: Default::default(),
+                        };
+                        setup.metadata.set_imm(true);
+                        setup.metadata.set_trb_type(2);
+                        setup.metadata.set_trt(3);
+                        setup.int_target_trb_length.set_trb_length(8);
+                        self.info.write().transfer_rings[slot - 1].as_mut()
+                            .expect("").push(TRB { setup });
+                        let mut buf = [0u8; 8];
+                        let mut data = DataStageTRB::default();
+                        data.buffer = without_interrupts(|| {
+                            crate::PAGE_TABLE.read().translate_addr(
+                                VirtAddr::from_ptr(buf.as_mut_ptr())
+                            ).expect("")
+                        });
+                        data.params.set_transfer_size(8); // USB Descriptor length
+                        data.meta.set_trb_type(0x3);
+                        data.meta.set_write(true);
+                        data.meta.set_eval_next(true);
+                        data.meta.set_chain(true);
+                        self.info.write().transfer_rings[slot - 1].as_mut()
+                            .expect("").push(TRB { data }).as_u64();
 
-                            let transfer_ring = XHCIRing::new_with_capacity(1, true);
-                            let transfer_ring_ptr = without_interrupts(|| {
-                                crate::PAGE_TABLE.read().translate_addr(
-                                    VirtAddr::from_ptr(transfer_ring.segments[0].as_ref() as *const XHCIRingSegment)
-                                ).expect("")
-                            }).as_u64();
-                            assert_eq!(transfer_ring_ptr & 0b1111, 0, "alignment");
-
-                            // Setup Slot Context
-                            let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
-                            let speed = ((portsc & OP_PORT_STATUS_SPEED_MASK) >> OP_PORT_STATUS_SPEED_SHIFT) as u8;
-                            dev_ctx.slot.set_speed(speed);
-                            dev_ctx.slot.set_context_entries(1); // TODO Maybe not hardcode 1?
-                            dev_ctx.slot.root_hub_port_number = port_id;
-
-                            // Setup first EP Slot
-                            let epctx = &mut dev_ctx.endpoint[0];
-                            epctx.set_lsa_bit(); // Disable Streams
-                            epctx.set_cerr(3); // Max value (2 bit only)
-                            epctx.set_ep_type(EP_TYPE_CONTROL_BIDIR);
-                            epctx.max_packet_size = match speed {
-                                0 => {
-                                    error!("[XHCI] unknown device speed on port {}", port_id);
-                                    64
-                                }
-                                OP_PORT_STATUS_SPEED_LOW => 8,
-                                OP_PORT_STATUS_SPEED_FULL |
-                                OP_PORT_STATUS_SPEED_HIGH => 64,
-                                _ => 512,
-                            };
-                            epctx.average_trb_len = 8;
-                            epctx.dequeu_pointer = transfer_ring_ptr | 0x1; // Cycle Bit
-                            debug!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
-
-                            let mut input_ctx = Box::new(InputContext{
-                                input: Default::default(),
-                                slot: dev_ctx.slot.clone(),
-                                endpoint: dev_ctx.endpoint.clone(),
-                            });
-                            input_ctx.input[1] = 0b11;
-                            let input_ctx_ptr = without_interrupts(|| {
-                                crate::PAGE_TABLE.read().translate_addr(
-                                    VirtAddr::from_ptr(input_ctx.deref() as *const InputContext)
-                                ).expect("")
-                            });
-                            // Activate Entry
-                            self.info.write().device_contexts[slot - 1] = Some(dev_ctx);
-                            self.info.write().device_context_baa.as_mut().expect("").entries[slot] = ctx_ptr;
-                            self.info.write().transfer_rings[slot - 1] = Some(transfer_ring);
-
-
-                            let ptr = self.info.write().command_ring.as_mut().expect("").push(
-                                TRB { command: CommandTRB::address_device(slot as u8, input_ctx_ptr) }
-                            ).as_u64();
-                            let result = self.wait_command_complete(ptr);
-                            core::mem::drop(input_ctx); // Don't early drop
-                            debug!("[XHCI] Slot {} configured: {:?}", slot, result);
-
-                            // Query Device Descriptor
-                            let mut setup = SetupStageTRB {
-                                request_type: 0x80,
-                                request: 0x6,
-                                value: 0x100,
-                                index: 0,
-                                length: 8,
-                                int_target_trb_length: Default::default(),
-                                metadata: Default::default(),
-                            };
-                            setup.metadata.set_imm(true);
-                            setup.metadata.set_trb_type(2);
-                            setup.metadata.set_trt(3);
-                            setup.int_target_trb_length.set_trb_length(8);
-                            self.info.write().transfer_rings[slot - 1].as_mut()
-                                .expect("").push(TRB{setup: setup});
-                            let mut buf = [0u8; 8];
-                            let mut data = DataStageTRB::default();
-                            data.buffer = without_interrupts(|| {
-                                crate::PAGE_TABLE.read().translate_addr(
-                                    VirtAddr::from_ptr(buf.as_mut_ptr())
-                                ).expect("")
-                            });
-                            data.params.set_transfer_size(8); // USB Descriptor length
-                            data.meta.set_trb_type(0x3);
-                            data.meta.set_write(true);
-                            data.meta.set_eval_next(true);
-                            data.meta.set_chain(true);
-                            self.info.write().transfer_rings[slot - 1].as_mut()
-                                .expect("").push(TRB{data}).as_u64();
-
-                            let mut evnt_data = EventDataTRB::default();
-                            evnt_data.meta.set_ioc(true);
-                            evnt_data.meta.set_trb_type(0x7);
-                            self.info.write().transfer_rings[slot - 1].as_mut()
-                                .expect("").push(TRB{event_data: evnt_data});
-                            debug!("[XHCI] Rinning Doorbell {}", slot);
-                            self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
-                            loop {
-                                let result = self.poll_event_ring_trb();
-                                if let Some(trb) = result {
-                                    match trb {
-                                        TRBType::TransferEvent(t) => {
-                                            debug!("[XHCI] Transfer Event: {:?}", &t);
-                                            break;
-                                        },
-                                        _ => {
-                                            debug!("[XHCI] Unexp TRB: {:?}", &trb);
-                                        }
+                        let mut evnt_data = EventDataTRB::default();
+                        evnt_data.meta.set_ioc(true);
+                        evnt_data.meta.set_trb_type(0x7);
+                        self.info.write().transfer_rings[slot - 1].as_mut()
+                            .expect("").push(TRB { event_data: evnt_data });
+                        debug!("[XHCI] Rinning Doorbell {}", slot);
+                        self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
+                        loop {
+                            let result = self.poll_event_ring_trb();
+                            if let Some(trb) = result {
+                                match trb {
+                                    TRBType::TransferEvent(t) => {
+                                        debug!("[XHCI] Transfer Event: {:?}", &t);
+                                        break;
                                     }
-                                } else {
-                                    error!("[XHCI] Poll TRB timedout");
-                                    break;
+                                    _ => {
+                                        debug!("[XHCI] Unexp TRB: {:?}", &trb);
+                                    }
                                 }
+                            } else {
+                                error!("[XHCI] Poll TRB timedout");
+                                break;
                             }
-                            use pretty_hex::*;
-                            println!("dump: {}", buf[0..].as_ref().hex_dump());
-                            debug!("[XHCI] Completed")
                         }
-                        None => {
-                            warn!("[XHCI] Failed to enable port {}", port_id);
-                        }
+                        use pretty_hex::*;
+                        println!("dump: {}", buf[0..].as_ref().hex_dump());
+                        self.reset_port(port_id);
+                        debug!("[XHCI] Completed")
                     }
 
                     port.status = XHCIPortStatus::Active;

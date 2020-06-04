@@ -397,13 +397,16 @@ impl CommandTRB {
         trb
     }
 
-    pub fn address_device(slot: u8, context_ptr: PhysAddr) -> Self {
+    pub fn address_device(slot: u8, context_ptr: PhysAddr, block: bool) -> Self {
         let mut trb = Self::default();
         trb.payload[3] |= (TRB_TYPE_ADDRESS_DEVICE_CMD as u32) << TRB_COMMON_TYPE_SHIFT as u32;
         assert_eq!(context_ptr.as_u64() & 0b1111, 0, "alignment");
         trb.payload[0] = context_ptr.as_u64() as u32;
         trb.payload[1] = (context_ptr.as_u64() >> 32) as u32;
         trb.payload[3] |= (slot as u32) << 24;
+        if block {
+            trb.payload[3] |= 1u32 << 9;
+        }
         trb
     }
 }
@@ -594,11 +597,22 @@ impl EndpointContext {
     }
 }
 
+#[bitfield]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct SlotContextDW1 {
+    route_string: B20,
+    speed: B4,
+    resz: B1,
+    mtt: bool,
+    hub: bool,
+    context_entries: B5
+}
+
 #[repr(C)]
 #[derive(Default, Clone)]
 pub struct SlotContext {
     // DWORD1
-    pub dword1: u32,
+    pub dword1: SlotContextDW1,
     // DWORD2
     pub max_exit_latency: u16,
     pub root_hub_port_number: u8,
@@ -615,22 +629,6 @@ pub struct SlotContext {
     _res1: [u32; 4],
 }
 const_assert_size!(SlotContext, 32);
-
-impl SlotContext {
-    pub fn set_speed(&mut self, speed: u8) {
-        set_field!(self.dword1,
-            SLOT_CTX_SPEED_SHIFT, SLOT_CTX_SPEED_MASK,
-            (speed as u32)
-        );
-    }
-
-    pub fn set_context_entries(&mut self, max_entry: u8) {
-        set_field!(self.dword1,
-            SLOT_CTX_ENTRYS_SHIFT, SLOT_CTX_ENTRYS_MASK,
-            (max_entry as u32)
-        );
-    }
-}
 
 /* ------------- Scratchpad ----------------- */
 #[repr(C, align(4096))]

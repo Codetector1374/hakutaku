@@ -31,6 +31,7 @@ pub enum XHCIPortStatus {
 pub struct XHCIPort {
     pub controller_id: usize,
     pub port_id: u8,
+    pub slot: u8,
     pub matching_port: Option<u8>,
     pub port_type: XHCIPortGeneration,
     pub status: XHCIPortStatus,
@@ -41,6 +42,7 @@ impl XHCIPort {
         Self {
             controller_id: controller,
             port_id: port,
+            slot: 0,
             matching_port: None,
             port_type: XHCIPortGeneration::Unknown,
             status: XHCIPortStatus::Disconnected

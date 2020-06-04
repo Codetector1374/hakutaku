@@ -796,6 +796,71 @@ impl XHCI {
         debug!("[XHCI] Slot {} configured: {:?}", slot, result);
     }
 
+    fn fetch_device_descriptor(&self, slot_id: u8, buf: &mut[u8]) {
+        let slot = slot_id as usize;
+        // Query Device Descriptor
+        let mut setup = SetupStageTRB {
+            request_type: 0x80,
+            request: 0x6,
+            value: 0x100,
+            index: 0,
+            length: 8,
+            int_target_trb_length: Default::default(),
+            metadata: Default::default(),
+        };
+        setup.metadata.set_imm(true);
+        setup.metadata.set_trb_type(2);
+        setup.metadata.set_trt(3);
+        setup.int_target_trb_length.set_trb_length(8);
+        self.info.write().transfer_rings[slot - 1].as_mut()
+            .expect("").push(TRB { setup });
+        let mut data = DataStageTRB::default();
+        data.buffer = without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                VirtAddr::from_ptr(buf.as_mut_ptr())
+            ).expect("")
+        });
+        data.params.set_transfer_size(buf.len() as u32); // USB Descriptor length
+        data.meta.set_trb_type(0x3);
+        data.meta.set_write(true);
+        data.meta.set_eval_next(true);
+        data.meta.set_chain(true);
+        self.info.write().transfer_rings[slot - 1].as_mut()
+            .expect("").push(TRB { data }).as_u64();
+
+        let mut evnt_data = EventDataTRB::default();
+        evnt_data.meta.set_ioc(true);
+        evnt_data.meta.set_trb_type(0x7);
+        self.info.write().transfer_rings[slot - 1].as_mut()
+            .expect("").push(TRB { event_data: evnt_data });
+
+        let mut status_stage = StatusStageTRB::default();
+        status_stage.meta.set_trb_type(4);
+        status_stage.meta.set_ioc(true);
+        self.info.write().transfer_rings[slot - 1].as_mut()
+            .expect("").push(TRB{status_stage});
+
+        debug!("[XHCI] Rinning Doorbell {}", slot);
+        self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
+        loop {
+            let result = self.poll_event_ring_trb();
+            if let Some(trb) = result {
+                match trb {
+                    TRBType::TransferEvent(t) => {
+                        debug!("[XHCI] Transfer Event: {:?}", &t);
+                        break;
+                    }
+                    _ => {
+                        debug!("[XHCI] Unexp TRB: {:?}", &trb);
+                    }
+                }
+            } else {
+                error!("[XHCI] Poll TRB timedout");
+                break;
+            }
+        }
+    }
+
     fn poll_port_status(&self, port_id: u8) {
         let ready = self.is_port_connected(port_id);
         let port_wrapper = self.ports.get(&port_id).cloned().expect("thing");
@@ -829,64 +894,16 @@ impl XHCI {
                         let slot = en.slot as usize;
                         assert_ne!(slot, 0, "invalid slot 0 received");
                         self.setup_slot(slot as u8, port_id, 0, true);
-                        // Query Device Descriptor
-                        let mut setup = SetupStageTRB {
-                            request_type: 0x80,
-                            request: 0x6,
-                            value: 0x100,
-                            index: 0,
-                            length: 8,
-                            int_target_trb_length: Default::default(),
-                            metadata: Default::default(),
-                        };
-                        setup.metadata.set_imm(true);
-                        setup.metadata.set_trb_type(2);
-                        setup.metadata.set_trt(3);
-                        setup.int_target_trb_length.set_trb_length(8);
-                        self.info.write().transfer_rings[slot - 1].as_mut()
-                            .expect("").push(TRB { setup });
                         let mut buf = [0u8; 8];
-                        let mut data = DataStageTRB::default();
-                        data.buffer = without_interrupts(|| {
-                            crate::PAGE_TABLE.read().translate_addr(
-                                VirtAddr::from_ptr(buf.as_mut_ptr())
-                            ).expect("")
-                        });
-                        data.params.set_transfer_size(8); // USB Descriptor length
-                        data.meta.set_trb_type(0x3);
-                        data.meta.set_write(true);
-                        data.meta.set_eval_next(true);
-                        data.meta.set_chain(true);
-                        self.info.write().transfer_rings[slot - 1].as_mut()
-                            .expect("").push(TRB { data }).as_u64();
-
-                        let mut evnt_data = EventDataTRB::default();
-                        evnt_data.meta.set_ioc(true);
-                        evnt_data.meta.set_trb_type(0x7);
-                        self.info.write().transfer_rings[slot - 1].as_mut()
-                            .expect("").push(TRB { event_data: evnt_data });
-                        debug!("[XHCI] Rinning Doorbell {}", slot);
-                        self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
-                        loop {
-                            let result = self.poll_event_ring_trb();
-                            if let Some(trb) = result {
-                                match trb {
-                                    TRBType::TransferEvent(t) => {
-                                        debug!("[XHCI] Transfer Event: {:?}", &t);
-                                        break;
-                                    }
-                                    _ => {
-                                        debug!("[XHCI] Unexp TRB: {:?}", &trb);
-                                    }
-                                }
-                            } else {
-                                error!("[XHCI] Poll TRB timedout");
-                                break;
-                            }
-                        }
+                        self.fetch_device_descriptor(slot as u8, &mut buf);
                         use pretty_hex::*;
                         println!("dump: {}", buf[0..].as_ref().hex_dump());
                         self.reset_port(port_id);
+                        self.setup_slot(slot as u8, port_id, 0, false);
+                        let mut buf2 = vec![0u8; buf[0] as usize];
+                        self.fetch_device_descriptor(slot as u8, &mut buf2);
+                        println!("dump full: {:?}", buf2[0..].as_ref().hex_dump());
+
                         debug!("[XHCI] Completed")
                     }
 

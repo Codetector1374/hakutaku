@@ -230,6 +230,7 @@ pub union TRB {
     pub command: CommandTRB,
     pub setup: SetupStageTRB,
     pub data: DataStageTRB,
+    pub status_stage: StatusStageTRB,
     pub event_data: EventDataTRB,
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
@@ -528,6 +529,22 @@ pub struct EventDataTRB {
     pub ptr: u64,
     interrupter: u32, // This needs to change to a bitfield, it's wrong
     pub meta: EventDataTRBDW4,
+}
+
+/* ------------- Status Stage TRB ----------- */
+#[bitfield]
+#[derive(Default, Debug, Copy, Clone)]
+pub struct StatusStageTRBDW3 {
+    _res: B22,
+    interrupter: B10,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct StatusStageTRB {
+    _resz: u64,
+    pub interrupter: StatusStageTRBDW3,
+    pub meta: DataStageDW4, // This is the same as DataStageDW4, so reused
 }
 
 /* -------------- Device Request Packet ----- */

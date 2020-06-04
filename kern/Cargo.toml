@@ -22,6 +22,7 @@ pretty-hex="0.1.1"
 stack-vec = { path="../libs/stack-vec" }
 kernel_api = { path="../libs/kernel_api" }
 core-io = { path="../libs/core-io" }
+modular-bitfield = "0.6.0"
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]

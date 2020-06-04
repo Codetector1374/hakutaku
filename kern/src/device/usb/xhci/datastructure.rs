@@ -207,6 +207,7 @@ pub enum TRBType {
     PortStatusChange(PortStatusChangeTRB),
     CommandCompletion(CommandCompletionTRB),
     HostControllerEvent(HostControllerEventTRB),
+    TransferEvent(TransferEventTRB),
 }
 
 impl From<TRB> for TRBType {
@@ -217,6 +218,7 @@ impl From<TRB> for TRBType {
             TRB_TYPE_EVNT_PORT_STATUS_CHG => PortStatusChange(unsafe { t.port_status_change }),
             TRB_TYPE_EVNT_CMD_COMPLETE => CommandCompletion(unsafe { t.command_completion }),
             TRB_TYPE_EVNT_HC => HostControllerEvent(unsafe { t.host_controller_event }),
+            TRB_TYPE_EVNT_TRANSFER => TransferEvent(unsafe { t.transfer_event }),
             _ => TRBType::Unknown(t),
         }
     }
@@ -227,10 +229,13 @@ impl From<TRB> for TRBType {
 pub union TRB {
     pub command: CommandTRB,
     pub setup: SetupStageTRB,
+    pub data: DataStageTRB,
+    pub event_data: EventDataTRB,
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
     pub command_completion: CommandCompletionTRB,
     pub host_controller_event: HostControllerEventTRB,
+    pub transfer_event: TransferEventTRB,
     pseudo: PseudoTRB,
 }
 const_assert_size!(TRB, 16);
@@ -292,6 +297,24 @@ pub struct HostControllerEventTRB {
     flags: u16,
     _res1: u16,
 }
+
+#[bitfield]
+#[derive(Copy, Clone, Debug)]
+pub struct TransferEventTRBStatusWord {
+    bytes_remain: B24,
+    code: B8,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TransferEventTRB {
+    ptr: u64,
+    status: TransferEventTRBStatusWord,
+    flags: u16,
+    endpoint: u8,
+    slot: u8,
+}
+const_assert_size!(TransferEventTRB, 16);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -393,16 +416,39 @@ impl Into<TRB> for CommandTRB {
 
 /* ------- Setup TRB ------------- */
 
+use modular_bitfield::prelude::*;
+
+#[bitfield]
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
+pub struct SetupStageDW3 {
+    trb_length: B17,
+    _res0: B5,
+    interrupter: B10,
+}
+
+#[bitfield]
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
+pub struct SetupStageDW4 {
+    cycle: bool,
+    _res0: B4,
+    ioc: bool,
+    imm: bool,
+    _res1: B3,
+    trb_type: B6,
+    trt: B2,
+    _res2: B14,
+}
+
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct SetupStageTRB {
-    request_type: u8,
-    request: u8,
-    value: u16,
-    index: u16,
-    length: u16,
+    pub request_type: u8,
+    pub request: u8,
+    pub value: u16,
+    pub index: u16,
+    pub length: u16,
     /// Interrupt Target: (31:22), TRBLength (16:0)
-    int_target_trb_length: u32,
+    pub int_target_trb_length: SetupStageDW3,
     /// Transfer Type: (17:16)
     /// > 0: No Data, 1: Reserved, 2: Out Data, 3: In Data
     /// Transfer Type (15:10)
@@ -410,9 +456,87 @@ pub struct SetupStageTRB {
     /// immData (6:6)
     /// Interrupt On Complete (5:5)
     /// Cycle Bit (0:0)
-    metadata: u32,
+    pub metadata: SetupStageDW4,
 }
 const_assert_size!(SetupStageTRB, 16);
+
+/* ----------- Data Stage TRB --------------- */
+#[bitfield]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct DataStageDW3 {
+    transfer_size: B17,
+    td_size: B5,
+    interrupter: B10,
+}
+
+#[bitfield]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct DataStageDW4 {
+    cycle: bool,
+    eval_next: bool,
+    isp: bool,
+    ns: bool,
+    chain: bool,
+    ioc: bool,
+    idt: bool,
+    _res: B3,
+    trb_type: B6,
+    write: bool,
+    _res1: B15,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct DataStageTRB {
+    pub buffer: PhysAddr,
+    pub params: DataStageDW3,
+    pub meta: DataStageDW4,
+}
+
+impl Default for DataStageTRB {
+    fn default() -> Self {
+        Self {
+            buffer: PhysAddr::new(0),
+            params: Default::default(),
+            meta: Default::default(),
+        }
+    }
+}
+
+/* -------------- Event Data TRB ---------- */
+
+#[bitfield]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub struct EventDataTRBDW4 {
+    cycle: bool,
+    eval_next: bool,
+    _res: B2,
+    chain: bool,
+    ioc: bool,
+    _res2: B3,
+    block_event_interrupt: bool,
+    trb_type: B6,
+    _res3: B16
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct EventDataTRB {
+    pub ptr: u64,
+    interrupter: u32, // This needs to change to a bitfield, it's wrong
+    pub meta: EventDataTRBDW4,
+}
+
+/* -------------- Device Request Packet ----- */
+#[repr(C)]
+pub struct DeviceRequestPacket {
+    request_type: u8,
+    request: u8,
+    value: u16,
+    index: u16,
+    length: u16,
+}
+const_assert_size!(DeviceRequestPacket, 8);
 
 /* ------------- Device Context ------------- */
 

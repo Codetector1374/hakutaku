@@ -54,6 +54,8 @@ extern crate hashbrown;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate modular_bitfield;
 
 #[macro_use]
 pub mod vga_buffer;

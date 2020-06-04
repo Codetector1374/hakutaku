@@ -32,6 +32,7 @@ use x86_64::instructions::tlb::flush_all;
 use core::cmp::max;
 use core::option::Option::Some;
 use crate::hardware::keyboard::blocking_get_char;
+use pretty_hex::PrettyHex;
 
 pub mod extended_capability;
 pub mod port;
@@ -637,9 +638,7 @@ impl XHCI {
         }
     }
 
-    fn wait_command_complete(&self, ptr: u64) -> Option<CommandCompletionTRB> {
-        // TODO update this code to use interrupt notification system
-        self.regs.lock().get_doorbell_regster(0).reg.write(0);
+    fn poll_event_ring_trb(&self) -> Option<TRBType> {
         let timeout = Duration::from_millis(1000) + PIT::current_time();
         loop {
             let pop = self.info.write().event_ring.as_mut().expect("").pop(false);
@@ -649,17 +648,7 @@ impl XHCI {
                         INT_ERDP_BUSY_MASK | (INT_ERDP_DESI_MASK & self.info.read().event_ring.as_ref().expect("").dequeue.0 as u64);
                     self.regs.lock().get_runtime_interrupt_register(0).event_ring_deque_ptr.write(tmp);
                     let lol = TRBType::from(trb);
-                    match lol {
-                        TRBType::CommandCompletion(ctrb) => {
-                            if ctrb.trb_pointer == ptr {
-                                return Some(ctrb);
-                            }
-                            debug!("[XHCI] Got unexpected Complete TRB {:#x}", ctrb.trb_pointer);
-                        }
-                        _ => {
-                            debug!("[XHCI] Got unexpected TRB\n {:?}", &lol);
-                        }
-                    }
+                    return Some(lol);
                 }
                 None => {}
             }
@@ -667,6 +656,22 @@ impl XHCI {
                 return None;
             }
             sleep(Duration::from_millis(10)).expect("slept");
+        }
+    }
+
+    fn wait_command_complete(&self, ptr: u64) -> Option<CommandCompletionTRB> {
+        // TODO update this code to use interrupt notification system
+        self.regs.lock().get_doorbell_regster(0).reg.write(0);
+        loop {
+            let trb = self.poll_event_ring_trb()?;
+            match trb {
+                TRBType::CommandCompletion(c) => {
+                    if c.trb_pointer == ptr {
+                        return Some(c);
+                    }
+                },
+                _ => {}
+            }
         }
     }
 
@@ -747,7 +752,7 @@ impl XHCI {
                     debug!("[XHCI] Port {} connected", port_id);
                     // TODO Maybe read speed for usb3 here before reset
                     self.reset_port(port_id);
-                    match self.send_slot_enable(port.deref_mut()) {
+                    match self.send_slot_enable() {
                         Some(en) => {
                             let slot = en.slot as usize;
                             assert_ne!(slot, 0, "invalid slot 0 received");
@@ -816,6 +821,65 @@ impl XHCI {
                             let result = self.wait_command_complete(ptr);
                             core::mem::drop(input_ctx); // Don't early drop
                             debug!("[XHCI] Slot {} configured: {:?}", slot, result);
+
+                            // Query Device Descriptor
+                            let mut setup = SetupStageTRB {
+                                request_type: 0x80,
+                                request: 0x6,
+                                value: 0x100,
+                                index: 0,
+                                length: 8,
+                                int_target_trb_length: Default::default(),
+                                metadata: Default::default(),
+                            };
+                            setup.metadata.set_imm(true);
+                            setup.metadata.set_trb_type(2);
+                            setup.metadata.set_trt(3);
+                            setup.int_target_trb_length.set_trb_length(8);
+                            self.info.write().transfer_rings[slot - 1].as_mut()
+                                .expect("").push(TRB{setup: setup});
+                            let mut buf = [0u8; 8];
+                            let mut data = DataStageTRB::default();
+                            data.buffer = without_interrupts(|| {
+                                crate::PAGE_TABLE.read().translate_addr(
+                                    VirtAddr::from_ptr(buf.as_mut_ptr())
+                                ).expect("")
+                            });
+                            data.params.set_transfer_size(8); // USB Descriptor length
+                            data.meta.set_trb_type(0x3);
+                            data.meta.set_write(true);
+                            data.meta.set_eval_next(true);
+                            data.meta.set_chain(true);
+                            self.info.write().transfer_rings[slot - 1].as_mut()
+                                .expect("").push(TRB{data}).as_u64();
+
+                            let mut evnt_data = EventDataTRB::default();
+                            evnt_data.meta.set_ioc(true);
+                            evnt_data.meta.set_trb_type(0x7);
+                            self.info.write().transfer_rings[slot - 1].as_mut()
+                                .expect("").push(TRB{event_data: evnt_data});
+                            debug!("[XHCI] Rinning Doorbell {}", slot);
+                            self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
+                            loop {
+                                let result = self.poll_event_ring_trb();
+                                if let Some(trb) = result {
+                                    match trb {
+                                        TRBType::TransferEvent(t) => {
+                                            debug!("[XHCI] Transfer Event: {:?}", &t);
+                                            break;
+                                        },
+                                        _ => {
+                                            debug!("[XHCI] Unexp TRB: {:?}", &trb);
+                                        }
+                                    }
+                                } else {
+                                    error!("[XHCI] Poll TRB timedout");
+                                    break;
+                                }
+                            }
+                            use pretty_hex::*;
+                            println!("dump: {}", buf[0..].as_ref().hex_dump());
+                            debug!("[XHCI] Completed")
                         }
                         None => {
                             warn!("[XHCI] Failed to enable port {}", port_id);
@@ -831,7 +895,7 @@ impl XHCI {
         }
     }
 
-    pub fn send_slot_enable(&self, port: &mut XHCIPort) -> Option<CommandCompletionTRB> {
+    pub fn send_slot_enable(&self) -> Option<CommandCompletionTRB> {
         let cmd = CommandTRB::enable_slot();
         let ptr = self.info.try_write().expect("lock fuck").command_ring.as_mut()
             .expect("no cmd ring found").push(cmd.into()).as_u64();

@@ -33,6 +33,7 @@ use core::cmp::max;
 use core::option::Option::Some;
 use crate::hardware::keyboard::blocking_get_char;
 use pretty_hex::PrettyHex;
+use alloc::string::String;
 
 pub mod extended_capability;
 pub mod port;
@@ -791,9 +792,8 @@ impl XHCI {
         let ptr = self.info.write().command_ring.as_mut().expect("").push(
             TRB { command: CommandTRB::address_device(slot as u8, input_ctx_ptr, block_cmd) }
         ).as_u64();
-        let result = self.wait_command_complete(ptr);
+        self.wait_command_complete(ptr).expect("command_complete");
         core::mem::drop(input_ctx); // Don't early drop
-        debug!("[XHCI] Slot {} configured: {:?}", slot, result);
     }
 
     fn fetch_device_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8, w_index: u16, buf: &mut [u8]) {
@@ -859,6 +859,19 @@ impl XHCI {
         }
     }
 
+    fn fetch_device_string_descriptor(&self, slot: u8, index: u8, lang: u16) -> String {
+        let mut buf= [0u8; 1];
+        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                                     index, lang, &mut buf);
+        let mut buf2 = vec![0u8; buf[0] as usize];
+        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                                     index, lang, &mut buf2);
+        assert_eq!(buf2[1], DESCRIPTOR_TYPE_STRING);
+        let buf2: Vec<u16> = buf2.chunks_exact(2)
+            .map(|l| {u16::from_ne_bytes([l[0], l[1]])}).collect();
+        String::from_utf16_lossy(&buf2[1..])
+    }
+
     fn poll_port_status(&self, port_id: u8) {
         let ready = self.is_port_connected(port_id);
         let port_wrapper = self.ports.get(&port_id).cloned().expect("thing");
@@ -907,11 +920,8 @@ impl XHCI {
                         let mut buf2 = vec![0u8; buf[0] as usize];
                         self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 0, 0, &mut buf2);
                         let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
-                        println!("String Descriptor 0: {:?}", buf2[0..].as_ref().hex_dump());
-                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 2, lang, &mut buf);
-                        let mut buf2 = vec![0u8; buf[0] as usize];
-                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 2, lang, &mut buf2);
-                        println!("String Descriptor 1: {:?}", buf2[0..].as_ref().hex_dump());
+                        let lol = self.fetch_device_string_descriptor(slot as u8, 2, lang);
+                        println!("[XHCI] Device \"{}\"", lol);
 
                         debug!("[XHCI] Completed setup port {}", port_id);
                     }
@@ -929,9 +939,9 @@ impl XHCI {
         let cmd = CommandTRB::enable_slot();
         let ptr = self.info.try_write().expect("lock fuck").command_ring.as_mut()
             .expect("no cmd ring found").push(cmd.into()).as_u64();
-        debug!("[XHCI] Sending Slot EN");
+        trace!("[XHCI] Sending Slot EN");
         let lol = self.wait_command_complete(ptr);
-        debug!("[XHCI] Command Complete: {:?}", lol);
+        trace!("[XHCI] Command Complete: {:?}", lol);
         lol
     }
 

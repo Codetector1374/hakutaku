@@ -804,7 +804,7 @@ impl XHCI {
             request: 0x6,
             value: 0x100,
             index: 0,
-            length: 8,
+            length: buf.len() as u16,
             int_target_trb_length: Default::default(),
             metadata: Default::default(),
         };
@@ -820,6 +820,7 @@ impl XHCI {
                 VirtAddr::from_ptr(buf.as_mut_ptr())
             ).expect("")
         });
+        debug!("[XHCI] requesting with size: {}", buf.len());
         data.params.set_transfer_size(buf.len() as u32); // USB Descriptor length
         data.meta.set_trb_type(0x3);
         data.meta.set_write(true);
@@ -829,7 +830,7 @@ impl XHCI {
             .expect("").push(TRB { data }).as_u64();
 
         let mut evnt_data = EventDataTRB::default();
-        evnt_data.meta.set_ioc(true);
+        // evnt_data.meta.set_ioc(true);
         evnt_data.meta.set_trb_type(0x7);
         self.info.write().transfer_rings[slot - 1].as_mut()
             .expect("").push(TRB { event_data: evnt_data });

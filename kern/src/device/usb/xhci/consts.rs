@@ -149,3 +149,19 @@ pub const EP_TYPE_CONTROL_BIDIR: u8 = 4;
 pub const EP_TYPE_ISOCH_IN: u8 = 5;
 pub const EP_TYPE_BULK_IN: u8 = 6;
 pub const EP_TYPE_INTERRUPT_IN: u8 = 7;
+
+/* --------- Standard Requests ---------------- */
+pub const REQUEST_GET_STATUS :u8 = 0;
+pub const REQUEST_CLEAR_FEATURE :u8 = 1;
+pub const REQUEST_SET_FEATURE :u8 = 3;
+pub const REQUEST_SET_ADDRESS :u8 = 5;
+pub const REQUEST_GET_DESCRIPTOR :u8 = 6;
+
+pub const DESCRIPTOR_TYPE_DEVICE: u8 = 1;
+pub const DESCRIPTOR_TYPE_CONFIGURATION: u8 = 2;
+pub const DESCRIPTOR_TYPE_STRING: u8 = 3;
+pub const DESCRIPTOR_TYPE_INTERFACE: u8 = 4;
+pub const DESCRIPTOR_TYPE_ENDPOINT: u8 = 5;
+pub const DESCRIPTOR_TYPE_DEVICE_QUALIFIER: u8 = 6;
+pub const DESCRIPTOR_TYPE_OTHER_SPEED_CONFIGURATION: u8 = 7;
+pub const DESCRIPTOR_TYPE_INTERFACE_POWER: u8 = 8;

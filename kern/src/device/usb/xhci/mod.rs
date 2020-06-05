@@ -679,13 +679,13 @@ impl XHCI {
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
         let mut port_status = port_op.portsc.read();
         if port_status & OP_PORT_STATUS_POWER_MASK == 0 {
-            debug!("[XHCI] Port {} not powered. Powering On", port_id);
+            trace!("[XHCI] Port {} not powered. Powering On", port_id);
             let tmp = (port_status & !OP_PORT_STATUS_PED_MASK) | OP_PORT_STATUS_POWER_MASK;
             port_op.portsc.write(tmp);
             while port_op.portsc.read() & OP_PORT_STATUS_POWER_MASK == 0 {}
             sleep(Duration::from_millis(20)).expect("");
             port_status = port_op.portsc.read();
-            debug!("[XHCI] port {} powerup complete", port_id);
+            trace!("[XHCI] port {} powerup complete", port_id);
         }
         let mut tmp = port_status & !OP_PORT_STATUS_PED_MASK; // Mask off this bit, writing a 1 will disable device
         tmp |= OP_PORT_STATUS_OCC_MASK | OP_PORT_STATUS_CSC_MASK;
@@ -720,7 +720,7 @@ impl XHCI {
                 return;
             }
         }
-        debug!("[XHCI] port {} reset", port_id);
+        trace!("[XHCI] port {} reset", port_id);
     }
 
     fn setup_slot(&self, slot: u8, port_id: u8, max_packet_size: u16, block_cmd: bool) {
@@ -739,7 +739,7 @@ impl XHCI {
             ).expect("")
         }).as_u64();
         assert_eq!(transfer_ring_ptr & 0b1111, 0, "alignment");
-        debug!("[XHCI] Setting Transfer Ring Pointer to {:#x}", transfer_ring_ptr);
+        trace!("[XHCI] Setting Transfer Ring Pointer to {:#x}", transfer_ring_ptr);
 
         // Setup Slot Context
         let portsc = self.regs.lock().operational_regs.get_port_operational_register(port_id).portsc.read();
@@ -769,7 +769,7 @@ impl XHCI {
         }
         epctx.average_trb_len = 8;
         epctx.dequeu_pointer = transfer_ring_ptr | 0x1; // Cycle Bit
-        debug!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
+        trace!("[XHCI] speed after reset, {}, {:x}", speed, portsc);
 
         let mut input_ctx = Box::new(InputContext {
             input: Default::default(),
@@ -796,14 +796,14 @@ impl XHCI {
         debug!("[XHCI] Slot {} configured: {:?}", slot, result);
     }
 
-    fn fetch_device_descriptor(&self, slot_id: u8, buf: &mut[u8]) {
+    fn fetch_device_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8, w_index: u16, buf: &mut [u8]) {
         let slot = slot_id as usize;
         // Query Device Descriptor
         let mut setup = SetupStageTRB {
             request_type: 0x80,
-            request: 0x6,
-            value: 0x100,
-            index: 0,
+            request: REQUEST_GET_DESCRIPTOR,
+            value: ((desc_type as u16) << 8) | (desc_index as u16),
+            index: w_index,
             length: buf.len() as u16,
             int_target_trb_length: Default::default(),
             metadata: Default::default(),
@@ -820,7 +820,6 @@ impl XHCI {
                 VirtAddr::from_ptr(buf.as_mut_ptr())
             ).expect("")
         });
-        debug!("[XHCI] requesting with size: {}", buf.len());
         data.params.set_transfer_size(buf.len() as u32); // USB Descriptor length
         data.meta.set_trb_type(0x3);
         data.meta.set_write(true);
@@ -830,7 +829,6 @@ impl XHCI {
             .expect("").push(TRB { data }).as_u64();
 
         let mut evnt_data = EventDataTRB::default();
-        // evnt_data.meta.set_ioc(true);
         evnt_data.meta.set_trb_type(0x7);
         self.info.write().transfer_rings[slot - 1].as_mut()
             .expect("").push(TRB { event_data: evnt_data });
@@ -839,20 +837,19 @@ impl XHCI {
         status_stage.meta.set_trb_type(4);
         status_stage.meta.set_ioc(true);
         self.info.write().transfer_rings[slot - 1].as_mut()
-            .expect("").push(TRB{status_stage});
+            .expect("").push(TRB { status_stage });
 
-        debug!("[XHCI] Rinning Doorbell {}", slot);
+        trace!("[XHCI] Rinning Doorbell {}", slot);
         self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
         loop {
             let result = self.poll_event_ring_trb();
             if let Some(trb) = result {
                 match trb {
-                    TRBType::TransferEvent(t) => {
-                        debug!("[XHCI] Transfer Event: {:?}", &t);
+                    TRBType::TransferEvent(_t) => {
                         break;
                     }
                     _ => {
-                        debug!("[XHCI] Unexp TRB: {:?}", &trb);
+                        trace!("[XHCI] Unexp TRB: {:?}", &trb);
                     }
                 }
             } else {
@@ -896,16 +893,27 @@ impl XHCI {
                         assert_ne!(slot, 0, "invalid slot 0 received");
                         self.setup_slot(slot as u8, port_id, 0, true);
                         let mut buf = [0u8; 8];
-                        self.fetch_device_descriptor(slot as u8, &mut buf);
-                        use pretty_hex::*;
-                        println!("dump: {}", buf[0..].as_ref().hex_dump());
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_DEVICE, 0, 0, &mut buf);
                         self.reset_port(port_id);
                         self.setup_slot(slot as u8, port_id, 0, false);
                         let mut buf2 = vec![0u8; buf[0] as usize];
-                        self.fetch_device_descriptor(slot as u8, &mut buf2);
-                        println!("dump full: {:?}", buf2[0..].as_ref().hex_dump());
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_DEVICE, 0, 0, &mut buf2);
+                        use pretty_hex::*;
+                        println!("Device Descriptor: {:?}", buf2[0..].as_ref().hex_dump());
+                        let mut buf = [0u8; 2];
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 0, 0, &mut buf);
+                        assert_eq!(buf[1], DESCRIPTOR_TYPE_STRING, "Descriptor is not STRING");
+                        assert!(buf[0] >= 4, "has language");
+                        let mut buf2 = vec![0u8; buf[0] as usize];
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 0, 0, &mut buf2);
+                        let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
+                        println!("String Descriptor 0: {:?}", buf2[0..].as_ref().hex_dump());
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 2, lang, &mut buf);
+                        let mut buf2 = vec![0u8; buf[0] as usize];
+                        self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING, 2, lang, &mut buf2);
+                        println!("String Descriptor 1: {:?}", buf2[0..].as_ref().hex_dump());
 
-                        debug!("[XHCI] Completed")
+                        debug!("[XHCI] Completed setup port {}", port_id);
                     }
 
                     port.status = XHCIPortStatus::Active;

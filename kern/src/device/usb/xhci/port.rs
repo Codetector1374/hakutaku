@@ -25,6 +25,7 @@ pub enum XHCIPortStatus {
     Connected,
     Active,
     InactiveUSB3CompanionPort,
+    Failed,
 }
 
 #[derive(Debug)]

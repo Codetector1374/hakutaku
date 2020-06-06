@@ -310,7 +310,7 @@ pub struct TransferEventTRBStatusWord {
 #[derive(Copy, Clone, Debug)]
 pub struct TransferEventTRB {
     ptr: u64,
-    status: TransferEventTRBStatusWord,
+    pub status: TransferEventTRBStatusWord,
     flags: u16,
     endpoint: u8,
     slot: u8,

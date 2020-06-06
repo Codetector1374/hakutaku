@@ -1,5 +1,7 @@
 pub mod interrupt;
 pub mod xhci;
+pub mod descriptor;
+pub mod error;
 
 use spin::{Mutex, RwLock};
 use crate::device::usb::xhci::XHCI;

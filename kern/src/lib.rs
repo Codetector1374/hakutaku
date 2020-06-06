@@ -214,7 +214,7 @@ pub extern fn usb_process() -> ! {
     }
 
     loop {
-        G_USB.xhci.read().as_ref().expect("has xhci").poll_ports();
+        // G_USB.xhci.read().as_ref().expect("has xhci").poll_ports();
         sleep(Duration::from_millis(100)).unwrap();
     }
 }

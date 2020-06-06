@@ -35,6 +35,8 @@ use crate::hardware::keyboard::blocking_get_char;
 use pretty_hex::PrettyHex;
 use alloc::string::String;
 use alloc::borrow::ToOwned;
+use crate::device::usb::descriptor::{USBDeviceDescriptor, USBConfigurationDescriptor};
+use crate::device::usb::error::USBError;
 
 pub mod extended_capability;
 pub mod port;
@@ -698,6 +700,7 @@ impl XHCI {
         port_op.portsc.read() & ready_mask == ready_mask
     }
 
+    // TODO: return Result
     fn reset_port(&self, port_id: u8) {
         let port_op = self.regs.lock().operational_regs.get_port_operational_register(port_id);
         let port_status = port_op.portsc.read();
@@ -797,8 +800,9 @@ impl XHCI {
         core::mem::drop(input_ctx); // Don't early drop
     }
 
-    fn fetch_device_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8,
-                               w_index: u16, buf: &mut [u8]) -> Result<(), ()> {
+    fn fetch_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8,
+                        w_index: u16, buf: &mut [u8]) -> Result<usize, USBError>
+    {
         let slot = slot_id as usize;
         // Query Device Descriptor
         let mut setup = SetupStageTRB {
@@ -847,8 +851,9 @@ impl XHCI {
             let result = self.poll_event_ring_trb();
             if let Some(trb) = result {
                 match trb {
-                    TRBType::TransferEvent(_t) => {
-                        return Ok(())
+                    TRBType::TransferEvent(t) => {
+                        let bytes_remain = t.status.get_bytes_remain() as usize;
+                        return Ok(buf.len() - bytes_remain);
                     }
                     _ => {
                         trace!("[XHCI] Unexp TRB: {:?}", &trb);
@@ -856,63 +861,64 @@ impl XHCI {
                 }
             } else {
                 error!("[XHCI] Poll TRB timedout");
-                break;
+                return Err(USBError::ControlEndpointTimeout);
             }
         }
-        Err(())
     }
 
-    fn fetch_device_string_descriptor(&self, slot: u8, index: u8, lang: u16) -> Option<String> {
-        let mut buf= [0u8; 1];
-        let _ = self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
-                                     index, lang, &mut buf);
+    fn fetch_device_descriptor(&self, slot_id: u8) -> Result<USBDeviceDescriptor, USBError> {
+        let mut buf2 = [0u8; 18];
+        self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_DEVICE, 0, 0, &mut buf2)?;
+        Ok(unsafe { core::mem::transmute(buf2) })
+    }
+
+    // fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptor, ()> {
+    //
+    // }
+
+    fn fetch_string_descriptor(&self, slot: u8, index: u8, lang: u16) -> Result<String, USBError> {
+        let mut buf = [0u8; 1];
+        self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                              index, lang, &mut buf)?;
         if buf[0] == 0 {
-            return None;
+            return Err(USBError::DescriptorNotAvailable);
         }
         let mut buf2 = vec![0u8; buf[0] as usize];
-        if self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
-                                     index, lang, &mut buf2).is_err() {
-            return None;
-        }
+        self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                                 index, lang, &mut buf2)?;
         assert_eq!(buf2[1], DESCRIPTOR_TYPE_STRING);
         let buf2: Vec<u16> = buf2.chunks_exact(2)
-            .map(|l| {u16::from_ne_bytes([l[0], l[1]])}).collect();
-        Some(String::from_utf16_lossy(&buf2[1..]))
+            .map(|l| { u16::from_ne_bytes([l[0], l[1]]) }).collect();
+        Ok(String::from_utf16_lossy(&buf2[1..]))
     }
 
     /// returns Ok(slot_id)
-    fn setup_new_device(&self, port_id: u8) -> Result<u8, ()> {
+    fn setup_new_device(&self, port_id: u8) -> Result<u8, USBError> {
         self.reset_port(port_id);
-        if let Some(en) = self.send_slot_enable() {
-            let slot = en.slot as usize;
-            assert_ne!(slot, 0, "invalid slot 0 received");
-            self.setup_slot(slot as u8, port_id, 0, true);
-            let mut buf = [0u8; 8];
-            self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_DEVICE,
-                                         0, 0, &mut buf)?;
-            self.reset_port(port_id);
-            self.setup_slot(slot as u8, port_id, 0, false);
-            let mut buf2 = vec![0u8; buf[0] as usize];
-            self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_DEVICE,
-                                         0, 0, &mut buf2)?;
-            use pretty_hex::*;
-            println!("Device Descriptor: {:?}", buf2[0..].as_ref().hex_dump());
-            let mut buf = [0u8; 2];
-            self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
-                                         0, 0, &mut buf)?;
-            assert_eq!(buf[1], DESCRIPTOR_TYPE_STRING, "Descriptor is not STRING");
-            assert!(buf[0] >= 4, "has language");
-            let mut buf2 = vec![0u8; buf[0] as usize];
-            self.fetch_device_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
-                                         0, 0, &mut buf2)?;
-            let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
-            let lol = self.fetch_device_string_descriptor(slot as u8, 2, lang);
-            println!("[XHCI] Device \"{}\"", lol.unwrap_or("[FAILED]".to_owned()));
+        let slot = self.send_slot_enable()? as usize;
+        assert_ne!(slot, 0, "invalid slot 0 received");
+        self.setup_slot(slot as u8, port_id, 0, true);
+        let mut buf = [0u8; 8];
+        self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_DEVICE,
+                              0, 0, &mut buf)?;
+        self.reset_port(port_id);
+        self.setup_slot(slot as u8, port_id, 0, false);
+        let desc = self.fetch_device_descriptor(slot as u8)?;
+        println!("Device Descriptor: {:?}", desc);
+        let mut buf = [0u8; 2];
+        self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                              0, 0, &mut buf)?;
+        assert_eq!(buf[1], DESCRIPTOR_TYPE_STRING, "Descriptor is not STRING");
+        assert!(buf[0] >= 4, "has language");
+        let mut buf2 = vec![0u8; buf[0] as usize];
+        self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
+                              0, 0, &mut buf2)?;
+        let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
+        let lol = self.fetch_string_descriptor(slot as u8, 2, lang);
+        println!("[XHCI] Device \"{}\"", lol.unwrap_or("[FAILED]".to_owned()));
 
-            debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
-            return Ok(slot as u8);
-        }
-        Err(())
+        debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
+        return Ok(slot as u8);
     }
 
     fn poll_port_status(&self, port_id: u8) {
@@ -927,13 +933,13 @@ impl XHCI {
                     // Perform Disconnection etc
                     debug!("[XHCI] Port {} disconnected", port_id);
                 }
-            },
+            }
             XHCIPortStatus::Failed => {
                 if !ready {
                     port.status = XHCIPortStatus::Disconnected;
                     debug!("[XHCI] Port {} disconnected", port_id);
                 }
-            },
+            }
             _ => {
                 if ready {
                     port.status = XHCIPortStatus::Connected;
@@ -953,7 +959,7 @@ impl XHCI {
                         Ok(slot) => {
                             port.status = XHCIPortStatus::Active;
                             port.slot = slot;
-                        },
+                        }
                         Err(_) => {
                             warn!("[XHCI] Failed to enable device on port {}", port_id);
                             port.status = XHCIPortStatus::Failed;
@@ -968,14 +974,16 @@ impl XHCI {
         }
     }
 
-    pub fn send_slot_enable(&self) -> Option<CommandCompletionTRB> {
+    /// @Ok(opened_slot: u8)
+    pub fn send_slot_enable(&self) -> Result<u8, USBError> {
         let cmd = CommandTRB::enable_slot();
         let ptr = self.info.try_write().expect("lock fuck").command_ring.as_mut()
             .expect("no cmd ring found").push(cmd.into()).as_u64();
         trace!("[XHCI] Sending Slot EN");
-        let lol = self.wait_command_complete(ptr);
-        trace!("[XHCI] Command Complete: {:?}", lol);
-        lol
+        match self.wait_command_complete(ptr) {
+            Some(trb) => Ok(trb.slot),
+            _ => Err(USBError::CommandTimeout)
+        }
     }
 
     pub fn poll_ports(&self) {

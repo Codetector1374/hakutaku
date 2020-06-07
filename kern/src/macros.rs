@@ -26,3 +26,15 @@ macro_rules! const_assert_size {
         $crate::const_assert_eq!(core::mem::size_of::<$struct>(), ($size));
     }
 }
+
+#[macro_export]
+macro_rules! pt_translate {
+    ($va: expr) => {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            crate::PAGE_TABLE.read().translate_addr(
+                $va
+            ).expect("")
+        })
+    };
+}
+

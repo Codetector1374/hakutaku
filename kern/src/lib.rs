@@ -84,6 +84,7 @@ lazy_static! {
         Mutex::new(SegmentFrameAllocator::new())
     };
 }
+
 #[cfg_attr(not(test), global_allocator)]
 pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();

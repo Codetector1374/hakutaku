@@ -35,7 +35,7 @@ use crate::hardware::keyboard::blocking_get_char;
 use pretty_hex::PrettyHex;
 use alloc::string::String;
 use alloc::borrow::ToOwned;
-use crate::device::usb::descriptor::{USBDeviceDescriptor, USBConfigurationDescriptor};
+use crate::device::usb::descriptor::{USBDeviceDescriptor, USBConfigurationDescriptor, USBInterfaceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptorSet, USBConfigurationDescriptorSet};
 use crate::device::usb::error::USBError;
 
 pub mod extended_capability;
@@ -800,60 +800,84 @@ impl XHCI {
         core::mem::drop(input_ctx); // Don't early drop
     }
 
-    fn fetch_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8,
-                        w_index: u16, buf: &mut [u8]) -> Result<usize, USBError>
+    fn send_control_command(&self, slot_id: u8, request_type: u8, request: u8,
+                            value: u16, index: u16, length: u16,
+                            write_to_usb: Option<&[u8]>, mut read_from_usb: Option<&mut [u8]>)
+                            -> Result<usize, USBError>
     {
-        let slot = slot_id as usize;
-        // Query Device Descriptor
+        let setup_trt = if write_to_usb.is_none() && read_from_usb.is_none() {
+            0u8
+        } else if write_to_usb.is_some() && read_from_usb.is_none() {
+            2u8
+        } else if read_from_usb.is_some() && write_to_usb.is_none() {
+            3u8
+        } else {
+            return Err(USBError::InvalidArgument);
+        };
         let mut setup = SetupStageTRB {
-            request_type: 0x80,
-            request: REQUEST_GET_DESCRIPTOR,
-            value: ((desc_type as u16) << 8) | (desc_index as u16),
-            index: w_index,
-            length: buf.len() as u16,
+            request_type,
+            request,
+            value,
+            index,
+            length,
             int_target_trb_length: Default::default(),
             metadata: Default::default(),
         };
         setup.metadata.set_imm(true);
-        setup.metadata.set_trb_type(2);
-        setup.metadata.set_trt(3);
-        setup.int_target_trb_length.set_trb_length(8);
-        self.info.write().transfer_rings[slot - 1].as_mut()
+        setup.metadata.set_trb_type(TRB_TYPE_SETUP as u8);
+        setup.metadata.set_trt(setup_trt);
+        setup.int_target_trb_length.set_trb_length(8); // Always 8: Section 6.4.1.2.1, Table 6-25
+        self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { setup });
-        let mut data = DataStageTRB::default();
-        data.buffer = without_interrupts(|| {
-            crate::PAGE_TABLE.read().translate_addr(
-                VirtAddr::from_ptr(buf.as_mut_ptr())
-            ).expect("")
-        });
-        data.params.set_transfer_size(buf.len() as u32); // USB Descriptor length
-        data.meta.set_trb_type(0x3);
-        data.meta.set_write(true);
-        data.meta.set_eval_next(true);
-        data.meta.set_chain(true);
-        self.info.write().transfer_rings[slot - 1].as_mut()
-            .expect("").push(TRB { data }).as_u64();
 
+        if write_to_usb.is_some() || read_from_usb.is_some() {
+            // Data TRB
+            let mut data = DataStageTRB::default();
+            data.buffer = if write_to_usb.is_some() {
+                pt_translate!(VirtAddr::from_ptr(write_to_usb.as_ref().unwrap().as_ptr()))
+            } else {
+                pt_translate!(VirtAddr::from_ptr(read_from_usb.as_mut().unwrap().as_mut_ptr()))
+            };
+            data.params.set_transfer_size(
+                if write_to_usb.is_some() {
+                    write_to_usb.as_ref().unwrap().len() as u32
+                } else {
+                    read_from_usb.as_ref().unwrap().len() as u32
+                });
+            data.meta.set_write(write_to_usb.is_some());
+            data.meta.set_trb_type(TRB_TYPE_DATA as u8);
+            data.meta.set_eval_next(true);
+            data.meta.set_chain(true);
+            self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
+                .expect("").push(TRB { data }).as_u64();
+        }
+        // Event Data TRB
         let mut evnt_data = EventDataTRB::default();
-        evnt_data.meta.set_trb_type(0x7);
-        self.info.write().transfer_rings[slot - 1].as_mut()
+        evnt_data.meta.set_trb_type(TRB_TYPE_EVENT_DATA as u8);
+        self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { event_data: evnt_data });
-
+        // Status TRB
         let mut status_stage = StatusStageTRB::default();
-        status_stage.meta.set_trb_type(4);
+        status_stage.meta.set_trb_type(TRB_TYPE_STATUS as u8);
         status_stage.meta.set_ioc(true);
-        self.info.write().transfer_rings[slot - 1].as_mut()
+        self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { status_stage });
 
-        trace!("[XHCI] Rinning Doorbell {}", slot);
-        self.regs.lock().get_doorbell_regster(slot as u8).reg.write(1);
+        self.regs.lock().get_doorbell_regster(slot_id).reg.write(1); // CTRL EP DB is 1
         loop {
             let result = self.poll_event_ring_trb();
             if let Some(trb) = result {
                 match trb {
                     TRBType::TransferEvent(t) => {
                         let bytes_remain = t.status.get_bytes_remain() as usize;
-                        return Ok(buf.len() - bytes_remain);
+                        let bytes_requested = if write_to_usb.is_some() {
+                            write_to_usb.unwrap().len()
+                        } else if read_from_usb.is_some() {
+                            read_from_usb.unwrap().len()
+                        } else {
+                            0
+                        };
+                        return Ok(bytes_requested - bytes_remain);
                     }
                     _ => {
                         trace!("[XHCI] Unexp TRB: {:?}", &trb);
@@ -866,15 +890,90 @@ impl XHCI {
         }
     }
 
+    fn fetch_descriptor(&self, slot_id: u8, desc_type: u8, desc_index: u8,
+                        w_index: u16, buf: &mut [u8]) -> Result<usize, USBError>
+    {
+        self.send_control_command(slot_id, 0x80, REQUEST_GET_DESCRIPTOR,
+                                  ((desc_type as u16) << 8) | (desc_index as u16),
+                                  w_index, buf.len() as u16, None,
+                                  Some(buf))
+    }
+
     fn fetch_device_descriptor(&self, slot_id: u8) -> Result<USBDeviceDescriptor, USBError> {
         let mut buf2 = [0u8; 18];
         self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_DEVICE, 0, 0, &mut buf2)?;
         Ok(unsafe { core::mem::transmute(buf2) })
     }
 
-    // fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptor, ()> {
-    //
-    // }
+    fn into_type<T: Sized>(buf: &[u8]) -> T {
+        let mut thing: T = unsafe { core::mem::zeroed() };
+        {
+            let tmp_slice = unsafe {
+                core::slice::from_raw_parts_mut(
+                    &mut thing as *mut T as *mut u8,
+                    core::mem::size_of::<T>(),
+                )
+            };
+            assert_eq!(tmp_slice.len(), buf.len(), "Unexpected size");
+            tmp_slice.copy_from_slice(&buf);
+        }
+        thing
+    }
+
+    fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptorSet, USBError> {
+        let mut config_descriptor = [0u8; 9];
+        self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut config_descriptor)?;
+        let config: USBConfigurationDescriptor = unsafe { core::mem::transmute(config_descriptor) };
+        let mut buf2 = vec![0u8; config.get_total_length() as usize];
+        self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut buf2)?;
+        let mut current_index = core::mem::size_of::<USBConfigurationDescriptor>();
+        use pretty_hex::*;
+        println!("FULL CONFIG DESC: {:#?}", buf2[0..].as_ref().hex_dump());
+        let mut interfaces: Vec<USBInterfaceDescriptorSet> = Default::default();
+        let mut interface_set: Option<USBInterfaceDescriptorSet> = None;
+        loop {
+            if current_index + 2 > buf2.len() {
+                if current_index != buf2.len() {
+                    use pretty_hex::*;
+                    warn!("[USB] Descriptor not fully fetched");
+                    println!("FULL CONFIG DESC: {:#?}", buf2[0..].as_ref().hex_dump());
+                }
+                break;
+            }
+            let desc_size = buf2[current_index] as usize;
+            if desc_size == 0 {
+                break;
+            }
+            let desc_type = buf2[current_index + 1];
+            match desc_type {
+                DESCRIPTOR_TYPE_INTERFACE => {
+                    if interface_set.is_some() {
+                        interfaces.push(interface_set.unwrap());
+                    }
+                    let desc: USBInterfaceDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
+                    debug!("[USB] IF Descriptor: {:?}", &desc);
+                    interface_set = Some(USBInterfaceDescriptorSet::new(desc));
+                }
+                DESCRIPTOR_TYPE_ENDPOINT => {
+                    let desc: USBEndpointDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
+                    debug!("[USB] EP Descriptor: {:?}", &desc);
+                    match &mut interface_set {
+                        Some(ifset) => {
+                            ifset.endpoints.push(desc);
+                        }
+                        _ => {
+                            error!("[USB] EP Descriptor without IF");
+                        }
+                    }
+                }
+                _ => {
+                    debug!("[USB] Unexpected descriptor type: {}", desc_type);
+                }
+            }
+            current_index += desc_size;
+        }
+        Ok(USBConfigurationDescriptorSet { config, ifsets: interfaces })
+    }
 
     fn fetch_string_descriptor(&self, slot: u8, index: u8, lang: u16) -> Result<String, USBError> {
         let mut buf = [0u8; 1];
@@ -885,7 +984,7 @@ impl XHCI {
         }
         let mut buf2 = vec![0u8; buf[0] as usize];
         self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
-                                 index, lang, &mut buf2)?;
+                              index, lang, &mut buf2)?;
         assert_eq!(buf2[1], DESCRIPTOR_TYPE_STRING);
         let buf2: Vec<u16> = buf2.chunks_exact(2)
             .map(|l| { u16::from_ne_bytes([l[0], l[1]]) }).collect();
@@ -904,7 +1003,7 @@ impl XHCI {
         self.reset_port(port_id);
         self.setup_slot(slot as u8, port_id, 0, false);
         let desc = self.fetch_device_descriptor(slot as u8)?;
-        println!("Device Descriptor: {:?}", desc);
+        // println!("Device Descriptor: {:#?}", desc);
         let mut buf = [0u8; 2];
         self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
                               0, 0, &mut buf)?;
@@ -914,8 +1013,18 @@ impl XHCI {
         self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
                               0, 0, &mut buf2)?;
         let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
-        let lol = self.fetch_string_descriptor(slot as u8, 2, lang);
-        println!("[XHCI] Device \"{}\"", lol.unwrap_or("[FAILED]".to_owned()));
+        {
+            // Display things
+            let mfg = self.fetch_string_descriptor(slot as u8, desc.manufacturer_index, lang)?;
+            let prd = self.fetch_string_descriptor(slot as u8, desc.product_index, lang)?;
+            let ser = if desc.serial_index != 0 {
+                self.fetch_string_descriptor(slot as u8, desc.serial_index, lang)?
+            } else {
+                String::from("")
+            };
+            debug!("[XHCI] New device: \nMFG: {}\nPrd:{}\nSerial:{}", mfg, prd, ser);
+        }
+        self.fetch_configuration_descriptor(slot as u8)?;
 
         debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
         return Ok(slot as u8);

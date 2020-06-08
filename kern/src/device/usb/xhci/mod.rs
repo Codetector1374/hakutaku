@@ -844,7 +844,7 @@ impl XHCI {
                 } else {
                     read_from_usb.as_ref().unwrap().len() as u32
                 });
-            data.meta.set_write(write_to_usb.is_some());
+            data.meta.set_read(read_from_usb.is_some());
             data.meta.set_trb_type(TRB_TYPE_DATA as u8);
             data.meta.set_eval_next(true);
             data.meta.set_chain(true);
@@ -895,8 +895,8 @@ impl XHCI {
     {
         self.send_control_command(slot_id, 0x80, REQUEST_GET_DESCRIPTOR,
                                   ((desc_type as u16) << 8) | (desc_index as u16),
-                                  w_index, buf.len() as u16, None,
-                                  Some(buf))
+                                  w_index, buf.len() as u16, None, Some(buf),
+        )
     }
 
     fn fetch_device_descriptor(&self, slot_id: u8) -> Result<USBDeviceDescriptor, USBError> {
@@ -921,22 +921,20 @@ impl XHCI {
     }
 
     fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptorSet, USBError> {
+        use pretty_hex::*;
         let mut config_descriptor = [0u8; 9];
         self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut config_descriptor)?;
         let config: USBConfigurationDescriptor = unsafe { core::mem::transmute(config_descriptor) };
         let mut buf2 = vec![0u8; config.get_total_length() as usize];
         self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut buf2)?;
         let mut current_index = core::mem::size_of::<USBConfigurationDescriptor>();
-        use pretty_hex::*;
         println!("FULL CONFIG DESC: {:#?}", buf2[0..].as_ref().hex_dump());
         let mut interfaces: Vec<USBInterfaceDescriptorSet> = Default::default();
         let mut interface_set: Option<USBInterfaceDescriptorSet> = None;
         loop {
             if current_index + 2 > buf2.len() {
                 if current_index != buf2.len() {
-                    use pretty_hex::*;
                     warn!("[USB] Descriptor not fully fetched");
-                    println!("FULL CONFIG DESC: {:#?}", buf2[0..].as_ref().hex_dump());
                 }
                 break;
             }
@@ -1024,7 +1022,11 @@ impl XHCI {
             };
             debug!("[XHCI] New device: \nMFG: {}\nPrd:{}\nSerial:{}", mfg, prd, ser);
         }
-        self.fetch_configuration_descriptor(slot as u8)?;
+        let configs = self.fetch_configuration_descriptor(slot as u8)?;
+        let config_val = configs.config.config_val;
+        debug!("[USB] Applying Config {}", config_val);
+        self.send_control_command(slot as u8, 0x0, REQUEST_SET_CONFIGURATION,
+                                  config_val as u16, 0, 0, None, None)?;
 
         debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
         return Ok(slot as u8);

@@ -485,7 +485,7 @@ pub struct DataStageDW4 {
     idt: bool,
     _res: B3,
     trb_type: B6,
-    write: bool,
+    read: bool,
     _res1: B15,
 }
 

@@ -22,6 +22,7 @@ pub struct USBDeviceDescriptor {
 }
 const_assert_size!(USBDeviceDescriptor, 18);
 
+
 pub struct USBConfigurationDescriptorSet {
     pub config: USBConfigurationDescriptor,
     pub ifsets: Vec<USBInterfaceDescriptorSet>,

@@ -89,6 +89,7 @@ pub struct XHCIInfo {
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     device_contexts: [Option<Box<DeviceContextArray>>; 255],
     transfer_rings: [Option<XHCIRing>; 255],
+    ep_transfer_ring: HashMap<(u8,u8), XHCIRing>,
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
@@ -105,6 +106,7 @@ impl Default for XHCIInfo {
             device_context_baa: None,
             device_contexts: [None; 255],
             transfer_rings: [None; 255],
+            ep_transfer_ring: Default::default(),
             command_ring: None,
             event_ring: None,
             event_ring_table: None,
@@ -504,6 +506,10 @@ impl XHCI {
             }
             sleep(Duration::from_millis(1)).expect("slept");
         }
+        for port in self.ports.values_mut() {
+            // TODO: Maybe we need to release rings
+            port.lock().reset();
+        }
         Ok(())
     }
 
@@ -729,6 +735,7 @@ impl XHCI {
     }
 
     fn setup_slot(&self, slot: u8, port_id: u8, max_packet_size: u16, block_cmd: bool) {
+        // TODO Cleanup we should not destroy dca because it gets called again;
         let slot = slot as usize;
         let mut dev_ctx = Box::new(DeviceContextArray::default());
         let ctx_ptr = without_interrupts(|| {
@@ -782,6 +789,7 @@ impl XHCI {
             endpoint: dev_ctx.endpoint.clone(),
         });
         input_ctx.input[1] = 0b11;
+        *dev_ctx = DeviceContextArray::default();
         let input_ctx_ptr = without_interrupts(|| {
             crate::PAGE_TABLE.read().translate_addr(
                 VirtAddr::from_ptr(input_ctx.deref() as *const InputContext)
@@ -798,6 +806,7 @@ impl XHCI {
         ).as_u64();
         self.wait_command_complete(ptr).expect("command_complete");
         core::mem::drop(input_ctx); // Don't early drop
+        debug!("TEST: {:?}", self.info.read().device_contexts[slot-1].as_ref().unwrap().slot);
     }
 
     fn send_control_command(&self, slot_id: u8, request_type: u8, request: u8,
@@ -928,7 +937,6 @@ impl XHCI {
         let mut buf2 = vec![0u8; config.get_total_length() as usize];
         self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut buf2)?;
         let mut current_index = core::mem::size_of::<USBConfigurationDescriptor>();
-        println!("FULL CONFIG DESC: {:#?}", buf2[0..].as_ref().hex_dump());
         let mut interfaces: Vec<USBInterfaceDescriptorSet> = Default::default();
         let mut interface_set: Option<USBInterfaceDescriptorSet> = None;
         loop {
@@ -949,12 +957,10 @@ impl XHCI {
                         interfaces.push(interface_set.unwrap());
                     }
                     let desc: USBInterfaceDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
-                    debug!("[USB] IF Descriptor: {:?}", &desc);
                     interface_set = Some(USBInterfaceDescriptorSet::new(desc));
                 }
                 DESCRIPTOR_TYPE_ENDPOINT => {
                     let desc: USBEndpointDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
-                    debug!("[USB] EP Descriptor: {:?}", &desc);
                     match &mut interface_set {
                         Some(ifset) => {
                             ifset.endpoints.push(desc);
@@ -969,6 +975,9 @@ impl XHCI {
                 }
             }
             current_index += desc_size;
+        }
+        if let Some(ifset) = interface_set {
+            interfaces.push(ifset);
         }
         Ok(USBConfigurationDescriptorSet { config, ifsets: interfaces })
     }
@@ -1027,7 +1036,28 @@ impl XHCI {
         debug!("[USB] Applying Config {}", config_val);
         self.send_control_command(slot as u8, 0x0, REQUEST_SET_CONFIGURATION,
                                   config_val as u16, 0, 0, None, None)?;
+        // SETUP EPs BEGIN
+        for interf in configs.ifsets.iter() {
+            for ep in interf.endpoints.iter() {
+                let epnum = ep.address & 0b1111;
+                let is_in = (ep.address & 0x80) >> 7;
+                let xhci_ep_number = epnum << 1 | is_in;
+                let ring = XHCIRing::new_with_capacity(1, true);
 
+                debug!("[USB] Endpoint #{}, is_out: {}: => ({:#x})", epnum, is_in, xhci_ep_number);
+            }
+        }
+        // SETUP EPs END
+        // GET MAX LUN BEGIN
+        use crate::device::usb::consts::*;
+        let request_type = USB_REQUEST_TYPE_DIR_DEVICE_TO_HOST | USB_REQUEST_TYPE_TYPE_CLASS | USB_REQUEST_TYPE_RECP_INTERFACE;
+        let mut lun = [0u8;1];
+        let size = self.send_control_command(slot as u8, request_type, 0xFE, // GET MAX LUN
+        0,0,1, None, Some(&mut lun))?;
+        assert_eq!(size, 1, "lun size wrong");
+        let lun = if lun[0] == 0xFF { 0x0 } else {lun[0]};
+        debug!("MAX LUN: {}", lun);
+        // GET MAX LUN END
         debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
         return Ok(slot as u8);
     }
@@ -1038,16 +1068,12 @@ impl XHCI {
         let mut port = port_wrapper.lock();
         match port.status {
             XHCIPortStatus::Active |
+            XHCIPortStatus::Failed |
             XHCIPortStatus::InactiveUSB3CompanionPort => {
                 if !ready {
+                    port.reset();
                     port.status = XHCIPortStatus::Disconnected;
                     // Perform Disconnection etc
-                    debug!("[XHCI] Port {} disconnected", port_id);
-                }
-            }
-            XHCIPortStatus::Failed => {
-                if !ready {
-                    port.status = XHCIPortStatus::Disconnected;
                     debug!("[XHCI] Port {} disconnected", port_id);
                 }
             }

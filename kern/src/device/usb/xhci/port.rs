@@ -1,4 +1,5 @@
 use volatile::Volatile;
+use alloc::vec::Vec;
 
 #[repr(C)]
 pub struct XHCIPortOperationalRegisters {
@@ -35,6 +36,7 @@ pub struct XHCIPort {
     pub slot: u8,
     pub matching_port: Option<u8>,
     pub port_type: XHCIPortGeneration,
+    pub active_eps: Vec<u8>,
     pub status: XHCIPortStatus,
 }
 
@@ -46,7 +48,14 @@ impl XHCIPort {
             slot: 0,
             matching_port: None,
             port_type: XHCIPortGeneration::Unknown,
+            active_eps: Default::default(),
             status: XHCIPortStatus::Disconnected
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.slot = 0;
+        self.active_eps.clear();
+        self.status = XHCIPortStatus::Disconnected;
     }
 }

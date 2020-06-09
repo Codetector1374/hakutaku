@@ -1,3 +1,4 @@
+pub mod consts;
 pub mod interrupt;
 pub mod xhci;
 pub mod descriptor;

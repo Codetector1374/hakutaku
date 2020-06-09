@@ -9,6 +9,7 @@ use crate::device::usb::xhci::consts::*;
 use alloc::alloc::Global;
 use core::alloc::{AllocRef, Layout, AllocInit};
 use core::ptr::NonNull;
+use modular_bitfield::prelude::*;
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
@@ -136,7 +137,6 @@ impl XHCIRing {
     }
 
     pub fn pop(&mut self, has_link: bool) -> Option<TRB> {
-        // TODO: Check Cycle State
         let trb = self.segments[self.dequeue.0].trbs[self.dequeue.1].clone();
         if trb.get_cycle_state() != self.cycle_state as u8 {
             return None;
@@ -232,6 +232,7 @@ pub union TRB {
     pub data: DataStageTRB,
     pub status_stage: StatusStageTRB,
     pub event_data: EventDataTRB,
+    pub normal: NormalTRB,
     pub link: LinkTRB,
     pub port_status_change: PortStatusChangeTRB,
     pub command_completion: CommandCompletionTRB,
@@ -418,10 +419,60 @@ impl Into<TRB> for CommandTRB {
     }
 }
 
+/// Common to all Transfer TRBs
+#[bitfield]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TransferTRBDW3 {
+    transfer_size: B17,
+    td_size: B5,
+    interrupter: B10,
+}
+
+/// Normal TRB
+
+#[bitfield]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct NormalTRBDW4 {
+    cycle: bool,
+    eval_next: bool,
+    int_on_short_packet: bool,
+    ns: bool,
+    chain: bool,
+    ioc: bool,
+    imm: bool,
+    _res0: B2,
+    block_event_interrupt: bool,
+    trb_type: B6,
+    _res1: B16,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct NormalTRB {
+    pub buffer: PhysAddr,
+    pub int_len: TransferTRBDW3,
+    pub meta: NormalTRBDW4,
+}
+
+impl NormalTRB {
+    pub fn new(buf: &[u8], max_len: usize) -> Self {
+        // TODO Support max len
+        assert!(buf.len() <= max_len, "exceed max len not supported");
+        let buf_ptr = pt_translate!(VirtAddr::from_ptr(buf.as_ptr()));
+        let mut thing = Self {
+            buffer: buf_ptr,
+            int_len: Default::default(),
+            meta: Default::default()
+        };
+        thing.int_len.set_transfer_size(buf.len() as u32);
+        thing.int_len.set_td_size(0);
+        thing.meta.set_ioc(true);
+        thing.meta.set_trb_type(TRB_TYPE_NORMAL as u8);
+        thing
+    }
+}
+
 /* ------- Setup TRB ------------- */
-
-use modular_bitfield::prelude::*;
-
 #[bitfield]
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
 pub struct SetupStageDW3 {
@@ -429,6 +480,7 @@ pub struct SetupStageDW3 {
     _res0: B5,
     interrupter: B10,
 }
+
 
 #[bitfield]
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
@@ -465,13 +517,6 @@ pub struct SetupStageTRB {
 const_assert_size!(SetupStageTRB, 16);
 
 /* ----------- Data Stage TRB --------------- */
-#[bitfield]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct DataStageDW3 {
-    transfer_size: B17,
-    td_size: B5,
-    interrupter: B10,
-}
 
 #[bitfield]
 #[derive(Copy, Clone, Debug, Default)]
@@ -493,7 +538,7 @@ pub struct DataStageDW4 {
 #[derive(Copy, Clone, Debug)]
 pub struct DataStageTRB {
     pub buffer: PhysAddr,
-    pub params: DataStageDW3,
+    pub params: TransferTRBDW3,
     pub meta: DataStageDW4,
 }
 
@@ -626,7 +671,7 @@ pub struct SlotContextDW1 {
 }
 
 #[repr(C)]
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct SlotContext {
     // DWORD1
     pub dword1: SlotContextDW1,

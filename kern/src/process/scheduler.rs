@@ -89,7 +89,7 @@ impl GlobalScheduler {
         SCHEDULER.switch_to(&mut trap);
         let tf = &mut trap as *mut TrapFrame;
         unsafe {
-            asm!("mov rsp, $0":: "r"(tf)::"volatile", "intel");
+            asm!("mov rsp, {0}", in(reg)tf);
             restore_context_wrapper();
         }
     }
@@ -104,7 +104,7 @@ impl GlobalScheduler {
 #[no_mangle]
 pub extern fn idle_process() {
     loop {
-        unsafe { asm!("hlt"::::"volatile") };
+        unsafe { asm!("hlt") };
     }
 }
 

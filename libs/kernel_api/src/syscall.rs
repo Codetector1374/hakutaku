@@ -23,20 +23,20 @@ pub fn sleep(span: Duration) -> OsResult<Duration> {
     let mut elapsed_ms: u64;
 
     unsafe {
-        asm!("mov rax, $3
-              mov rdi, $2
-              int 0x80
-              mov $0, rdx
-              mov $1, rax"
-             : "=r"(elapsed_ms), "=r"(ecode)
-             : "r"(ms), "i"(NR_SLEEP)
-             : "rax", "rdx", "rdi"
-             : "volatile", "intel");
+        asm!("mov rax, {syscall_num}",
+             "mov rdi, {0}",
+             "int 0x80",
+             "mov {1}, rdx",
+             "mov {2}, rax",
+             in(reg) ms,
+             lateout(reg) elapsed_ms,
+             lateout(reg) ecode,
+             syscall_num = const NR_SLEEP,
+             );
     }
 
     err_or!(ecode, Duration::from_millis(elapsed_ms))
 }
-
 
 
 // struct Console;

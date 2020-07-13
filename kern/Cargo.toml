@@ -12,7 +12,7 @@ crate-type = ["staticlib"]
 [dependencies]
 pc-keyboard = "0.5.0"
 x86_64 = { path="../libs/x86_64" }
-cpuio = "^0.2.0"
+cpuio = "0.3.0"
 spin = "^0.5.2"
 multiboot2 = "^0.8.2"
 volatile = { version="^0.2.6", features=["const_fn"] }

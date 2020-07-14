@@ -23,25 +23,25 @@ pub struct USBDeviceDescriptor {
 const_assert_size!(USBDeviceDescriptor, 18);
 
 
-pub struct USBConfigurationDescriptorSet {
-    pub config: USBConfigurationDescriptor,
-    pub ifsets: Vec<USBInterfaceDescriptorSet>,
-}
-
-// NOT A Descriptor
-pub struct USBInterfaceDescriptorSet {
-    pub interface: USBInterfaceDescriptor,
-    pub endpoints: Vec<USBEndpointDescriptor>,
-}
-
-impl USBInterfaceDescriptorSet {
-    pub fn new(ifdesc: USBInterfaceDescriptor) -> Self {
-        Self {
-            interface: ifdesc,
-            endpoints: Default::default()
-        }
-    }
-}
+// pub struct USBConfigurationDescriptorSet {
+//     pub config: USBConfigurationDescriptor,
+//     pub ifsets: Vec<USBInterfaceDescriptorSet>,
+// }
+//
+// // NOT A Descriptor
+// pub struct USBInterfaceDescriptorSet {
+//     pub interface: USBInterfaceDescriptor,
+//     pub endpoints: Vec<USBEndpointDescriptor>,
+// }
+//
+// impl USBInterfaceDescriptorSet {
+//     pub fn new(ifdesc: USBInterfaceDescriptor) -> Self {
+//         Self {
+//             interface: ifdesc,
+//             endpoints: Default::default()
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 #[repr(C)]

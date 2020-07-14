@@ -1,44 +1,45 @@
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cmp::max;
 use core::fmt::{Debug, Formatter};
 use core::ops::{Deref, DerefMut};
+use core::option::Option::Some;
 use core::time::Duration;
 
-use kernel_api::syscall::sleep;
+use hashbrown::HashMap;
+use pretty_hex::PrettyHex;
 use spin::{Mutex, RwLock};
 use volatile::{ReadOnly, Volatile};
+
+use kernel_api::syscall::sleep;
 use x86_64::{PhysAddr, VirtAddr};
 use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::instructions::tlb::flush_all;
 use x86_64::structures::paging::{Mapper, MapperAllSizes, Page, PageTableFlags, PhysFrame, Size4KiB};
 
+use crate::{PAGE_TABLE, SCHEDULER};
+use crate::device::ahci::structures::CommandTable;
 use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
 use crate::device::pci::device::PCIDevice;
 use crate::device::pci::PCIController;
+use crate::device::usb::descriptor::{USBConfigurationDescriptor, USBDeviceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptor};
+use crate::device::usb::error::USBError;
+use crate::device::usb::G_USB;
+use crate::device::usb::xhci::device::USBXHCIDevice;
 use crate::device::usb::xhci::extended_capability::*;
+use crate::hardware::keyboard::blocking_get_char;
 use crate::hardware::pit::PIT;
 use crate::interrupts::InterruptIndex;
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
-use crate::{PAGE_TABLE, SCHEDULER};
 
 use self::consts::*;
 use self::datastructure::*;
 use self::port::*;
 use self::registers::*;
-use hashbrown::HashMap;
-use alloc::sync::Arc;
-use crate::device::ahci::structures::CommandTable;
-use x86_64::instructions::tlb::flush_all;
-use core::cmp::max;
-use core::option::Option::Some;
-use crate::hardware::keyboard::blocking_get_char;
-use pretty_hex::PrettyHex;
-use alloc::string::String;
-use alloc::borrow::ToOwned;
-use crate::device::usb::descriptor::{USBDeviceDescriptor, USBConfigurationDescriptor, USBInterfaceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptorSet, USBConfigurationDescriptorSet};
-use crate::device::usb::error::USBError;
-use crate::device::usb::xhci::device::USBXHCIDevice;
-use crate::device::usb::G_USB;
 
 pub mod extended_capability;
 pub mod port;
@@ -813,7 +814,6 @@ impl XHCI {
         ).as_u64();
         self.wait_command_complete(ptr).expect("command_complete");
         core::mem::drop(input_ctx); // Don't early drop
-        debug!("TEST: {:?}", self.info.read().device_contexts[slot - 1].as_ref().unwrap().slot);
     }
 
     fn send_control_command(&self, slot_id: u8, request_type: u8, request: u8,
@@ -936,58 +936,58 @@ impl XHCI {
         thing
     }
 
-    fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptorSet, USBError> {
-        use pretty_hex::*;
-        let mut config_descriptor = [0u8; 9];
-        self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut config_descriptor)?;
-        let config: USBConfigurationDescriptor = unsafe { core::mem::transmute(config_descriptor) };
-        let mut buf2 = vec![0u8; config.get_total_length() as usize];
-        self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut buf2)?;
-        let mut current_index = core::mem::size_of::<USBConfigurationDescriptor>();
-        let mut interfaces: Vec<USBInterfaceDescriptorSet> = Default::default();
-        let mut interface_set: Option<USBInterfaceDescriptorSet> = None;
-        loop {
-            if current_index + 2 > buf2.len() {
-                if current_index != buf2.len() {
-                    warn!("[USB] Descriptor not fully fetched");
-                }
-                break;
-            }
-            let desc_size = buf2[current_index] as usize;
-            if desc_size == 0 {
-                break;
-            }
-            let desc_type = buf2[current_index + 1];
-            match desc_type {
-                DESCRIPTOR_TYPE_INTERFACE => {
-                    if interface_set.is_some() {
-                        interfaces.push(interface_set.unwrap());
-                    }
-                    let desc: USBInterfaceDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
-                    interface_set = Some(USBInterfaceDescriptorSet::new(desc));
-                }
-                DESCRIPTOR_TYPE_ENDPOINT => {
-                    let desc: USBEndpointDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
-                    match &mut interface_set {
-                        Some(ifset) => {
-                            ifset.endpoints.push(desc);
-                        }
-                        _ => {
-                            error!("[USB] EP Descriptor without IF");
-                        }
-                    }
-                }
-                _ => {
-                    debug!("[USB] Unexpected descriptor type: {}", desc_type);
-                }
-            }
-            current_index += desc_size;
-        }
-        if let Some(ifset) = interface_set {
-            interfaces.push(ifset);
-        }
-        Ok(USBConfigurationDescriptorSet { config, ifsets: interfaces })
-    }
+    // fn fetch_configuration_descriptor(&self, slot_id: u8) -> Result<USBConfigurationDescriptorSet, USBError> {
+    //     use pretty_hex::*;
+    //     let mut config_descriptor = [0u8; 9];
+    //     self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut config_descriptor)?;
+    //     let config: USBConfigurationDescriptor = unsafe { core::mem::transmute(config_descriptor) };
+    //     let mut buf2 = vec![0u8; config.get_total_length() as usize];
+    //     self.fetch_descriptor(slot_id, DESCRIPTOR_TYPE_CONFIGURATION, 0, 0, &mut buf2)?;
+    //     let mut current_index = core::mem::size_of::<USBConfigurationDescriptor>();
+    //     let mut interfaces: Vec<USBInterfaceDescriptorSet> = Default::default();
+    //     let mut interface_set: Option<USBInterfaceDescriptorSet> = None;
+    //     loop {
+    //         if current_index + 2 > buf2.len() {
+    //             if current_index != buf2.len() {
+    //                 warn!("[USB] Descriptor not fully fetched");
+    //             }
+    //             break;
+    //         }
+    //         let desc_size = buf2[current_index] as usize;
+    //         if desc_size == 0 {
+    //             break;
+    //         }
+    //         let desc_type = buf2[current_index + 1];
+    //         match desc_type {
+    //             DESCRIPTOR_TYPE_INTERFACE => {
+    //                 if interface_set.is_some() {
+    //                     interfaces.push(interface_set.unwrap());
+    //                 }
+    //                 let desc: USBInterfaceDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
+    //                 interface_set = Some(USBInterfaceDescriptorSet::new(desc));
+    //             }
+    //             DESCRIPTOR_TYPE_ENDPOINT => {
+    //                 let desc: USBEndpointDescriptor = Self::into_type(&buf2[current_index..current_index + desc_size]);
+    //                 match &mut interface_set {
+    //                     Some(ifset) => {
+    //                         ifset.endpoints.push(desc);
+    //                     }
+    //                     _ => {
+    //                         error!("[USB] EP Descriptor without IF");
+    //                     }
+    //                 }
+    //             }
+    //             _ => {
+    //                 debug!("[USB] Unexpected descriptor type: {}", desc_type);
+    //             }
+    //         }
+    //         current_index += desc_size;
+    //     }
+    //     if let Some(ifset) = interface_set {
+    //         interfaces.push(ifset);
+    //     }
+    //     Ok(USBConfigurationDescriptorSet { config, ifsets: interfaces })
+    // }
 
     fn fetch_string_descriptor(&self, slot: u8, index: u8, lang: u16) -> Result<String, USBError> {
         let mut buf = [0u8; 1];
@@ -1046,6 +1046,7 @@ impl XHCI {
             // XHCI
             control_slot: slot as u8,
             xhci_port: port_id,
+            controller_id: self.id,
             // USB System
             system_id: G_USB.issue_device_id(),
         });

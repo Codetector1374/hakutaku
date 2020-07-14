@@ -250,6 +250,16 @@ impl Shell {
                     Ok(-1)
                 }
             },
+            "lsusb" => {
+                for dev in G_USB.devices.read().iter() {
+                    println!("Bus {:03} Device {:03}: {:04x}:{:04x} {} {}",
+                             dev.bus(), dev.device(),
+                             dev.device_descriptor().vid, dev.device_descriptor().pid,
+                             dev.manufacture_string(), dev.product_string()
+                    );
+                }
+                Ok(0)
+            },
             "exit" => {
                 Ok(-1)
             },

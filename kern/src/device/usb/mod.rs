@@ -20,8 +20,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 pub static G_USB: USBSystem = USBSystem {
     xhci: RwLock::new(Vec::new()),
     devices: RwLock::new(Vec::new()),
-    next_controller_id: AtomicU64::new(0),
-    next_device_id: AtomicU64::new(0),
+    next_controller_id: AtomicU64::new(1),
+    next_device_id: AtomicU64::new(1),
 };
 
 

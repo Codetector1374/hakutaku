@@ -10,12 +10,13 @@ pub struct USBXHCIDevice {
 
     pub control_slot: u8,
     pub xhci_port: u8,
+    pub controller_id: u64,
 
     pub system_id: u64,
 }
 
 impl USBDevice for USBXHCIDevice {
-    fn device_descrpitor(&self) -> &USBDeviceDescriptor {
+    fn device_descriptor(&self) -> &USBDeviceDescriptor {
         &self.dev_descriptor
     }
 
@@ -29,6 +30,14 @@ impl USBDevice for USBXHCIDevice {
 
     fn serial_string(&self) -> &str {
         &self.serial
+    }
+
+    fn bus(&self) -> u8 {
+        self.controller_id as u8
+    }
+
+    fn device(&self) -> u8 {
+        self.xhci_port
     }
 
     fn system_device_id(&self) -> u64 {

@@ -37,11 +37,14 @@ use alloc::string::String;
 use alloc::borrow::ToOwned;
 use crate::device::usb::descriptor::{USBDeviceDescriptor, USBConfigurationDescriptor, USBInterfaceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptorSet, USBConfigurationDescriptorSet};
 use crate::device::usb::error::USBError;
+use crate::device::usb::xhci::device::USBXHCIDevice;
+use crate::device::usb::G_USB;
 
 pub mod extended_capability;
 pub mod port;
 pub mod consts;
 mod datastructure;
+pub mod device;
 pub mod registers;
 
 pub struct XHCI {
@@ -51,7 +54,9 @@ pub struct XHCI {
     mmio_size: usize,
     regs: Mutex<XHCIRegisters>,
     info: RwLock<XHCIInfo>,
-    pub ports: HashMap<u8, Arc<Mutex<XHCIPort>>>,
+    ports: HashMap<u8, Arc<Mutex<XHCIPort>>>,
+    devices: RwLock<Vec<Arc<USBXHCIDevice>>>,
+    id: u64,
 }
 
 pub struct XHCIRegisters {
@@ -89,7 +94,7 @@ pub struct XHCIInfo {
     device_context_baa: Option<Box<DeviceContextBaseAddressArray>>,
     device_contexts: [Option<Box<DeviceContextArray>>; 255],
     transfer_rings: [Option<XHCIRing>; 255],
-    ep_transfer_ring: HashMap<(u8,u8), XHCIRing>,
+    ep_transfer_ring: HashMap<(u8, u8), XHCIRing>,
     command_ring: Option<XHCIRing>,
     event_ring: Option<XHCIRing>,
     event_ring_table: Option<Box<EventRingSegmentTable>>,
@@ -173,7 +178,7 @@ pub enum XHCIError {
 }
 
 impl XHCI {
-    pub fn create_from_device(mut dev: PCIDevice) -> Option<XHCI> {
+    pub fn create_from_device(id: u64, mut dev: PCIDevice) -> Option<XHCI> {
         if let PCIDeviceClass::SerialBusController(PCISerialBusController::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
             // Step1: Enable Bus Master
             let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
@@ -234,6 +239,8 @@ impl XHCI {
                 regs: Mutex::new(regs),
                 info: Default::default(),
                 ports: Default::default(),
+                id,
+                devices: RwLock::new(Vec::new()),
             };
             controller.intel_ehci_xhci_handoff();
             controller.internal_initialize().expect("");
@@ -806,7 +813,7 @@ impl XHCI {
         ).as_u64();
         self.wait_command_complete(ptr).expect("command_complete");
         core::mem::drop(input_ctx); // Don't early drop
-        debug!("TEST: {:?}", self.info.read().device_contexts[slot-1].as_ref().unwrap().slot);
+        debug!("TEST: {:?}", self.info.read().device_contexts[slot - 1].as_ref().unwrap().slot);
     }
 
     fn send_control_command(&self, slot_id: u8, request_type: u8, request: u8,
@@ -1020,43 +1027,58 @@ impl XHCI {
         self.fetch_descriptor(slot as u8, DESCRIPTOR_TYPE_STRING,
                               0, 0, &mut buf2)?;
         let lang = buf2[2] as u16 | ((buf2[3] as u16) << 8);
-        {
-            // Display things
-            let mfg = self.fetch_string_descriptor(slot as u8, desc.manufacturer_index, lang)?;
-            let prd = self.fetch_string_descriptor(slot as u8, desc.product_index, lang)?;
-            let ser = if desc.serial_index != 0 {
-                self.fetch_string_descriptor(slot as u8, desc.serial_index, lang)?
-            } else {
-                String::from("")
-            };
-            debug!("[XHCI] New device: \nMFG: {}\nPrd:{}\nSerial:{}", mfg, prd, ser);
-        }
-        let configs = self.fetch_configuration_descriptor(slot as u8)?;
-        let config_val = configs.config.config_val;
-        debug!("[USB] Applying Config {}", config_val);
-        self.send_control_command(slot as u8, 0x0, REQUEST_SET_CONFIGURATION,
-                                  config_val as u16, 0, 0, None, None)?;
-        // SETUP EPs BEGIN
-        for interf in configs.ifsets.iter() {
-            for ep in interf.endpoints.iter() {
-                let epnum = ep.address & 0b1111;
-                let is_in = (ep.address & 0x80) >> 7;
-                let xhci_ep_number = epnum << 1 | is_in;
-                let ring = XHCIRing::new_with_capacity(1, true);
+        // Display things
+        let mfg = self.fetch_string_descriptor(slot as u8, desc.manufacturer_index, lang)?;
+        let prd = self.fetch_string_descriptor(slot as u8, desc.product_index, lang)?;
+        let serial = if desc.serial_index != 0 {
+            self.fetch_string_descriptor(slot as u8, desc.serial_index, lang)?
+        } else {
+            String::from("")
+        };
+        debug!("[XHCI] New device: \nMFG: {}\nPrd:{}\nSerial:{}", mfg, prd, serial);
 
-                debug!("[USB] Endpoint #{}, is_out: {}: => ({:#x})", epnum, is_in, xhci_ep_number);
-            }
-        }
-        // SETUP EPs END
-        // GET MAX LUN BEGIN
-        use crate::device::usb::consts::*;
-        let request_type = USB_REQUEST_TYPE_DIR_DEVICE_TO_HOST | USB_REQUEST_TYPE_TYPE_CLASS | USB_REQUEST_TYPE_RECP_INTERFACE;
-        let mut lun = [0u8;1];
-        let size = self.send_control_command(slot as u8, request_type, 0xFE, // GET MAX LUN
-        0,0,1, None, Some(&mut lun))?;
-        assert_eq!(size, 1, "lun size wrong");
-        let lun = if lun[0] == 0xFF { 0x0 } else {lun[0]};
-        debug!("MAX LUN: {}", lun);
+        let usb_dev = Arc::new(USBXHCIDevice {
+            // Device
+            dev_descriptor: desc,
+            manufacture: mfg,
+            product: prd,
+            serial,
+            // XHCI
+            control_slot: slot as u8,
+            xhci_port: port_id,
+            // USB System
+            system_id: G_USB.issue_device_id(),
+        });
+
+        self.devices.write().push(usb_dev.clone());
+        G_USB.register_device(usb_dev);
+
+        // let configs = self.fetch_configuration_descriptor(slot as u8)?;
+        // let config_val = configs.config.config_val;
+        // debug!("[USB] Applying Config {}", config_val);
+        // self.send_control_command(slot as u8, 0x0, REQUEST_SET_CONFIGURATION,
+        //                           config_val as u16, 0, 0, None, None)?;
+        // // SETUP EPs BEGIN
+        // for interf in configs.ifsets.iter() {
+        //     for ep in interf.endpoints.iter() {
+        //         let epnum = ep.address & 0b1111;
+        //         let is_in = (ep.address & 0x80) >> 7;
+        //         let xhci_ep_number = epnum << 1 | is_in;
+        //         let ring = XHCIRing::new_with_capacity(1, true);
+        //
+        //         debug!("[USB] Endpoint #{}, is_out: {}: => ({:#x})", epnum, is_in, xhci_ep_number);
+        //     }
+        // }
+        // // SETUP EPs END
+        // // GET MAX LUN BEGIN
+        // use crate::device::usb::consts::*;
+        // let request_type = USB_REQUEST_TYPE_DIR_DEVICE_TO_HOST | USB_REQUEST_TYPE_TYPE_CLASS | USB_REQUEST_TYPE_RECP_INTERFACE;
+        // let mut lun = [0u8;1];
+        // let size = self.send_control_command(slot as u8, request_type, 0xFE, // GET MAX LUN
+        // 0,0,1, None, Some(&mut lun))?;
+        // assert_eq!(size, 1, "lun size wrong");
+        // let lun = if lun[0] == 0xFF { 0x0 } else {lun[0]};
+        // debug!("MAX LUN: {}", lun);
         // GET MAX LUN END
         debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
         return Ok(slot as u8);
@@ -1073,8 +1095,14 @@ impl XHCI {
                 if !ready {
                     port.reset();
                     port.status = XHCIPortStatus::Disconnected;
-                    // Perform Disconnection etc
                     debug!("[XHCI] Port {} disconnected", port_id);
+                    // Perform Disconnection etc
+                    self.devices.write().retain(|dev| {
+                        if dev.xhci_port == port_id {
+                            G_USB.remove_device(dev.system_id);
+                        }
+                        true
+                    })
                 }
             }
             _ => {
@@ -1097,8 +1125,8 @@ impl XHCI {
                             port.status = XHCIPortStatus::Active;
                             port.slot = slot;
                         }
-                        Err(_) => {
-                            warn!("[XHCI] Failed to enable device on port {}", port_id);
+                        Err(e) => {
+                            warn!("[XHCI] Failed to enable device on port {} -> {:?}", port_id, e);
                             port.status = XHCIPortStatus::Failed;
                         }
                     }

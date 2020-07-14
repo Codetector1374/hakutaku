@@ -210,10 +210,6 @@ pub extern fn kernel_initialization_process() {
 pub extern fn usb_process() -> ! {
     use crate::device::usb::G_USB;
 
-    while G_USB.xhci.read().is_none() {
-        sleep(Duration::from_millis(1)).expect("");
-    }
-
     loop {
         // G_USB.xhci.read().as_ref().expect("has xhci").poll_ports();
         sleep(Duration::from_millis(100)).unwrap();

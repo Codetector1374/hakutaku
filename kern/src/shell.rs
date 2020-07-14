@@ -169,22 +169,14 @@ impl Shell {
                     1
                 };
                 for _ in 0..repeat {
-                    G_USB.xhci.read().as_ref().expect("LOL").send_nop();
+                    G_USB.xhci.read().get(0).expect("LOL").send_nop();
                     sleep(Duration::from_millis(10)).expect("");
                 }
                 Ok(0)
             },
             "p" => {
                 without_interrupts(|| {
-                    G_USB.xhci.read().as_ref().expect("has xhci").poll_ports()
-                });
-                Ok(0)
-            }
-            "usbsts" => {
-                without_interrupts(|| {
-                    for (k, v) in G_USB.xhci.read().as_ref().expect("").ports.iter() {
-                        println!("Port: {} is at state {:?}", *k, v.lock().status);
-                    }
+                    G_USB.xhci.read().get(0).expect("LOL").poll_ports();
                 });
                 Ok(0)
             }

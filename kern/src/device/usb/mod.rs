@@ -2,6 +2,7 @@ pub mod consts;
 pub mod interrupt;
 pub mod xhci;
 pub mod descriptor;
+pub mod device;
 pub mod error;
 
 use spin::{Mutex, RwLock};
@@ -13,17 +14,23 @@ use alloc::vec::Vec;
 use alloc::sync::Arc;
 use crate::device::usb::xhci::port::XHCIPort;
 use x86_64::instructions::interrupts::without_interrupts;
+use crate::device::usb::device::USBDevice;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 pub static G_USB: USBSystem = USBSystem {
-    xhci: RwLock::new(None),
-    ports: RwLock::new(Vec::new()),
+    xhci: RwLock::new(Vec::new()),
+    devices: RwLock::new(Vec::new()),
+    next_controller_id: AtomicU64::new(0),
+    next_device_id: AtomicU64::new(0),
 };
 
 
 pub struct USBSystem {
     // TODO: Support Multiple Controller
-    pub xhci: RwLock<Option<XHCI>>,
-    pub ports: RwLock<Vec<Arc<Mutex<XHCIPort>>>>
+    pub xhci: RwLock<Vec<Arc<XHCI>>>,
+    pub devices: RwLock<Vec<Arc<dyn USBDevice + Sync + Send>>>,
+    pub next_controller_id: AtomicU64,
+    pub next_device_id: AtomicU64,
 }
 
 impl USBSystem {
@@ -31,11 +38,11 @@ impl USBSystem {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
                 without_interrupts(|| {
-                    let dev = XHCI::create_from_device(dev);
+                    let dev = XHCI::create_from_device(self.next_controller_id.fetch_add(1, Ordering::Acquire), dev);
                     if dev.is_some() {
                         match self.xhci.try_write() {
                             Some(mut guard) => {
-                                guard.replace(dev.expect(""));
+                                guard.push(Arc::new(dev.expect("")));
                             },
                             None => {
                                 error!("[USB] Failed to obtain mutex");
@@ -43,12 +50,25 @@ impl USBSystem {
                         }
                     }
                 });
-                // self.xhci.read().as_ref().expect("thing").send_slot_enable();
             },
             _ => {
                 debug!("[USB] Unknown USB Host Type at {}: {:?}",
                        dev.bus_location_str(), dev.info.class);
             }
         }
+    }
+
+    pub fn issue_device_id(&self) -> u64 {
+        self.next_device_id.fetch_add(1, Ordering::Acquire)
+    }
+
+    pub fn register_device(&self, device: Arc<dyn USBDevice + Send + Sync>) {
+        self.devices.write().push(device);
+    }
+
+    pub fn remove_device(&self, device_id: u64) {
+        self.devices.write().retain(|dev| {
+            dev.system_device_id() != device_id
+        });
     }
 }

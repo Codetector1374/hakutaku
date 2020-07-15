@@ -128,6 +128,7 @@ pub const TRBS_PER_SEGMENT: usize = 256;
 pub const HALT_TIMEOUT: Duration = Duration::from_millis(16);
 pub const RESET_TIMEOUT: Duration = Duration::from_millis(250);
 pub const PORT_RESET_TIMEOUT: Duration = Duration::from_millis(1000);
+pub const COMMAND_WAIT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /* ------------- XHCI Slot Context -------------- */
 pub const SLOT_CTX_SPEED_SHIFT: u32 = 20;

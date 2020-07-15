@@ -10,6 +10,8 @@ use alloc::alloc::Global;
 use core::alloc::{AllocRef, Layout, AllocInit};
 use core::ptr::NonNull;
 use modular_bitfield::prelude::*;
+use spin::RwLock;
+use hashbrown::HashMap;
 
 #[repr(C, align(2048))]
 pub struct DeviceContextBaseAddressArray {
@@ -67,6 +69,7 @@ pub struct XHCIRing {
     pub enqueue: (usize, usize),
     pub dequeue: (usize, usize),
     pub cycle_state: u32,
+    pub segment_status: HashMap<u64, TRBType>
 }
 
 impl XHCIRing {
@@ -82,6 +85,7 @@ impl XHCIRing {
              * check ownership, so CCS = 1.
              */
             cycle_state: 1, // Ring is initialized to 0, thus cycle state = 1
+            segment_status: HashMap::new(),
         };
         for idx in 0..segments {
             ring.segments.push(Box::new(XHCIRingSegment::default()));
@@ -133,6 +137,7 @@ impl XHCIRing {
             }
             self.enqueue.1 = 0;
         }
+        self.segment_status.remove(&ptr.as_u64());
         ptr
     }
 
@@ -200,7 +205,7 @@ impl XHCIRingSegment {
 }
 
 /* --------------------------- TRBs --------------------------- */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TRBType {
     Unknown(TRB),
     Link(LinkTRB),

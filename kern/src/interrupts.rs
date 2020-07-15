@@ -83,6 +83,7 @@ pub fn init_idt() {
 extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
     use crate::device::usb::interrupt::usb_interrupt_handler;
     usb_interrupt_handler();
+    debug!("XHCI Int complete");
     unsafe {PICS.lock().notify_end_of_interrupt(InterruptIndex::XHCI as u8) };
 }
 

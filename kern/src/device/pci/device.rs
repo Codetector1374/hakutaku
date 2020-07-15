@@ -6,6 +6,8 @@ use x86_64::instructions::interrupts::without_interrupts;
 use x86_64::PhysAddr;
 use alloc::vec::Vec;
 use alloc::string::String;
+use crate::device::pci::PCICapabilityID;
+use crate::device::pci::consts::{CONF_COMMAND_OFFSET, CONF_INTERRUPT_OFFSET, CONF_CAPABILITY_PTR_OFFSET};
 
 const CONFIG_ADDR: u16 = 0x0CF8;
 const CONFIG_DATA: u16 = 0x0CFC;
@@ -112,15 +114,15 @@ impl PCIDevice {
         let ext_cap = (status >> 4) & 0x1 == 1;
         trace!("[PCI] has Capability List: {}", ext_cap);
         if ext_cap {
-            let cap_offset = self.read_config_dword_dep(13) as u8;
-            trace!("[PCI] Cap Offset {} ({})", cap_offset, cap_offset / 4);
+            let cap_offset = self.read_config_dword(CONF_CAPABILITY_PTR_OFFSET) as u8;
+            trace!("[PCI] Cap Offset {}", cap_offset);
             let mut next_offset = cap_offset;
             loop {
                 if next_offset == 0 {
                     break;
                 }
                 assert_eq!(next_offset % 4, 0, "register alignment");
-                let word = self.read_config_dword_dep(next_offset / 4);
+                let word = self.read_config_dword(next_offset);
                 let capid = word as u8;
                 let cap = PCICapability::new(capid, next_offset);
                 trace!("[PCI] Detected Capability {:?}", &cap.id);
@@ -131,7 +133,7 @@ impl PCIDevice {
     }
 
     pub fn read_status(&self) -> u16 {
-        (self.read_config_dword_dep(1) >> 16) as u16
+        (self.read_config_dword(CONF_COMMAND_OFFSET) >> 16) as u16
     }
 
     pub fn read_config_dword(&self, offset: u8) -> u32 {
@@ -240,6 +242,25 @@ impl PCIDevice {
     pub(super) fn set_secondary_bus_number(&mut self, n: u8) {
         let read = self.read_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET) & 0x00FF;
         self.write_config_word(super::consts::CONF_SECONDARY_BUS_OFFSET, read | (n as u16) << 8);
+    }
+
+    pub fn set_interrupt_vector(&mut self, vector: u8) {
+        // TODO: Implement MSI & MSIX
+        // let msix_lookup = self.info.capabilities.iter().find(|thing| { if let PCICapabilityID::MSIX = thing.id { true } else { false } });
+        // if let Some(msixcap) = msix_lookup {
+        //     debug!("[PCI] Found MSIX cap at offset {:#x}", msixcap.addr);
+        //
+        // } else {
+        //     let msi_lookup = self.info.capabilities.iter().find(|thing| { if let PCICapabilityID::MSI = thing.id { true } else { false } });
+        //     if let Some(msicap) = msi_lookup {
+        //         debug!("[PCI] Found MSI cap @ {:#x}", msicap.addr);
+        //     } else {
+        //         // fallback to PCI Interrupt
+        //     }
+        // }
+        self.write_config_word(CONF_INTERRUPT_OFFSET, vector as u16 | 0x1 << 8);
+        let _ = self.read_config_dword(CONF_INTERRUPT_OFFSET);
+        debug!("[PCI] Using traditional interrupt");
     }
 }
 

@@ -24,7 +24,7 @@ use crate::{PAGE_TABLE, SCHEDULER};
 use crate::device::ahci::structures::CommandTable;
 use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
 use crate::device::pci::device::PCIDevice;
-use crate::device::pci::PCIController;
+use crate::device::pci::{PCIController, PCICapabilityID};
 use crate::device::usb::descriptor::{USBConfigurationDescriptor, USBDeviceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptor};
 use crate::device::usb::error::USBError;
 use crate::device::usb::G_USB;
@@ -32,7 +32,7 @@ use crate::device::usb::xhci::device::USBXHCIDevice;
 use crate::device::usb::xhci::extended_capability::*;
 use crate::hardware::keyboard::blocking_get_char;
 use crate::hardware::pit::PIT;
-use crate::interrupts::InterruptIndex;
+use crate::interrupts::{InterruptIndex, PICS};
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
 
@@ -187,12 +187,9 @@ impl XHCI {
             dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET, tmp);
 
             // Step2: Setup Interrupt Lines
-            let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
-            dev.write_config_dword_dep(0xF, interrupt_number | 0x1 << 8);
-            let interrupt = dev.read_config_dword_dep(0xF);
-            let int_line = (interrupt >> 8) as u8;
-            let int_num = interrupt as u8;
-            trace!("[XHCI] Interrupt Line: {}, Interrupt Number: {}", int_line, int_num);
+            let interrupt_number = (InterruptIndex::XHCI).as_offset();
+            dev.set_interrupt_vector(interrupt_number);
+            PICS.lock().unmask_interrupt(interrupt_number);
 
             // Step3: Setup MMIO Registers
             let size = Self::xhci_address_space_detect(&mut dev);
@@ -274,6 +271,7 @@ impl XHCI {
 
     fn initialize_memory_structures(&mut self) -> Result<(), ()> {
         // Step 1: Setup Device Context Base Address Array
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         let mut info = self.info.write();
         if info.device_context_baa.is_none() {
             info.device_context_baa = Some(Box::new(Default::default()));
@@ -389,6 +387,7 @@ impl XHCI {
 
         // Step 2: Populate info from HCSParams1
         {
+            trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
             let mut info = self.info.write();
             let hcsparams1 = self.regs.lock().capability_regs.hcs_params[0].read();
             debug!("[XHCI] HCS1: {:#x}", hcsparams1);
@@ -414,6 +413,7 @@ impl XHCI {
 
         // Step 3: Setup opRegs->config
         {
+            trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
             let info = self.info.read();
             let mut tmp = self.regs.lock().operational_regs.config.read();
             tmp = (tmp & (!CAP_HCSPARAMS1_SLOTS_MASK)) | (info.max_slot as u32);
@@ -433,7 +433,7 @@ impl XHCI {
         // Clear Interrupt Ctrl / Pending
         self.regs.lock()
             .get_runtime_interrupt_register(0)
-            .iman.write(INT_IRQ_FLAG_INT_PENDING_MASK);
+            .iman.write(INT_IRQ_FLAG_INT_PENDING_MASK | INT_IRQ_FLAG_INT_EN_MASK);
         self.regs.lock().get_runtime_interrupt_register(0).imod.write(0);
 
         let ver = (self.regs.lock().capability_regs.length_and_ver.read() &
@@ -471,7 +471,7 @@ impl XHCI {
 
         let mut tmp = self.regs.lock().operational_regs.command.read();
         tmp |= OP_CMD_RUN_STOP_MASK | OP_CMD_HSERR_EN_MASK;
-        tmp &= !OP_CMD_INT_EN_MASK; // DISABLE INTERRUPT
+        tmp |= OP_CMD_INT_EN_MASK; // ENABLE INTERRUPT
         self.regs.lock().operational_regs.command.write(tmp);
 
         let wait_target = PIT::current_time() + HALT_TIMEOUT;
@@ -522,10 +522,12 @@ impl XHCI {
     }
 
     fn setup_port_structures(&mut self) {
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         for t in 1..=self.info.read().max_port {
             // TODO: [MultiXHCI] remove the 0 hardcoded controller
             self.ports.insert(t, Arc::new(Mutex::new(XHCIPort::new(0, t))));
         }
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         debug!("[XHCI] Controller has {} ports {} slots", self.info.read().max_port, self.info.read().max_slot);
 
         // Pairs: [begin, end)
@@ -584,7 +586,9 @@ impl XHCI {
 
     /// Must be called without interrupt
     pub fn handle_interrupt(&self) {
-        let current_status = self.regs.lock().operational_regs.status.read();
+        debug!("[XHCI] Interrupt");
+        let current_status = self.regs.try_lock().expect("lock contention during interrupt")
+            .operational_regs.status.read();
         let mut response = 0;
         if current_status & OP_STS_HOST_ERR_MASK != 0 {
             response |= OP_STS_HOST_ERR_MASK;
@@ -593,59 +597,46 @@ impl XHCI {
         if current_status & OP_STS_EVNT_PENDING_MASK != 0 {
             response |= OP_STS_EVNT_PENDING_MASK;
             debug!("[XHCI] Int: Event Interrupt");
-            if self.regs.lock().get_runtime_interrupt_register(0).pending() {
-                let int0_rs = self.regs.lock().get_runtime_interrupt_register(0);
-                int0_rs.iman.write(int0_rs.iman.read() |
-                    INT_IRQ_FLAG_INT_PENDING_MASK); // Clear Interrupt
-                let (trb, er_deq_0, er_deq_ptr) = {
-                    let mut info = self.info.write();
-                    let er = info.event_ring.as_mut().expect("");
-                    (er.pop(false), er.dequeue.0 as u64, er.dequeue_pointer())
-                };
+            if self.regs.try_lock().expect("lock").get_runtime_interrupt_register(0).pending() {
+                let trb = self.poll_event_ring_trb();
                 if let Some(trb) = trb {
-                    let tmp = er_deq_ptr.as_u64() | INT_ERDP_BUSY_MASK |
-                        (INT_ERDP_DESI_MASK & er_deq_0);
-                    int0_rs.event_ring_deque_ptr.write(tmp);
                     self.handle_event_trb(trb);
                 } else {
                     warn!("[XHCI] Event Ring is Empty when interrupt");
                 }
+                let tmp = self.regs.try_lock().expect("").get_runtime_interrupt_register(0).iman.read();
+                self.regs.try_lock().expect("").get_runtime_interrupt_register(0).iman.write(tmp);
             }
         }
         if current_status & OP_STS_PORT_PENDING_MASK != 0 {
-            response |= OP_STS_PORT_PENDING_MASK;
-            for port in 1..=self.info.read().max_port {
-                self.poll_port_status(port);
-            }
             debug!("[XHCI] Int: Port Interrupt");
+            response |= OP_STS_PORT_PENDING_MASK;
+            // for port in 1..=self.info.read().max_port {
+            //     self.poll_port_status(port);
+            // }
         }
 
         if current_status & (OP_STS_EVNT_PENDING_MASK | OP_STS_PORT_PENDING_MASK | OP_STS_HOST_ERR_MASK) == 0 {
             warn!("[XHCI] Interrupt without anything, checking command ring registers");
-            let reg = self.regs.lock().get_runtime_interrupt_register(0);
+            let reg = self.regs.try_lock().expect("").get_runtime_interrupt_register(0);
             reg.iman.write(reg.iman.read());
         }
 
-        match self.regs.try_lock() {
-            None => {
-                debug!("[XHCI] Failed to lock regs");
-            }
-            Some(mut g) => {
-                g.operational_regs.status.write(response); // Clear Interrupt
-            }
-        }
+        self.regs.try_lock().expect("lock").operational_regs.status.write(response); // Clear Interrupt
     }
 
-    fn handle_event_trb(&self, trb: TRB) {
-        let tmp: TRBType = trb.into();
+    // Called only in interrupt
+    fn handle_event_trb(&self, trb: TRBType) {
         use TRBType::*;
-        match tmp {
-            CommandCompletion(trb) => {
-                let ptr = trb.trb_pointer;
-                debug!("[XHCI] Command @ {:#x} completed", ptr);
+        match trb {
+            CommandCompletion(ctrb) => {
+                let ptr = ctrb.trb_pointer;
+                trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
+                self.info.try_write().expect("").event_ring.as_mut().expect("")
+                    .segment_status.insert(ptr, trb.clone());
             }
             PortStatusChange(trb) => {
-                self.poll_port_status(trb.port_id);
+                debug!("[XHCI] Port status change");
             }
             Unknown(trb) => {
                 debug!("[XHCI] unhandled trb with type: {}", trb.get_type());
@@ -656,39 +647,44 @@ impl XHCI {
         }
     }
 
+    /// This function should only be called with interrupt disabled
     fn poll_event_ring_trb(&self) -> Option<TRBType> {
-        let timeout = Duration::from_millis(1000) + PIT::current_time();
-        loop {
-            let pop = self.info.write().event_ring.as_mut().expect("").pop(false);
-            match pop {
-                Some(trb) => {
-                    let tmp = self.info.read().event_ring.as_ref().expect("").dequeue_pointer().as_u64() |
-                        INT_ERDP_BUSY_MASK | (INT_ERDP_DESI_MASK & self.info.read().event_ring.as_ref().expect("").dequeue.0 as u64);
-                    self.regs.lock().get_runtime_interrupt_register(0).event_ring_deque_ptr.write(tmp);
-                    let lol = TRBType::from(trb);
-                    return Some(lol);
-                }
-                None => {}
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
+        let pop = self.info.try_write().expect("").event_ring.as_mut().expect("").pop(false);
+        match pop {
+            Some(trb) => {
+                trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
+                let tmp = self.info.read().event_ring.as_ref().expect("").dequeue_pointer().as_u64() |
+                    INT_ERDP_BUSY_MASK | (INT_ERDP_DESI_MASK & self.info.read().event_ring.as_ref().expect("").dequeue.0 as u64);
+                self.regs.try_lock().expect("").get_runtime_interrupt_register(0).event_ring_deque_ptr.write(tmp);
+                let lol = TRBType::from(trb);
+                return Some(lol);
             }
-            if PIT::current_time() > timeout {
-                return None;
-            }
-            sleep(Duration::from_millis(10)).expect("slept");
+            None => {}
         }
+        return None;
     }
 
     fn wait_command_complete(&self, ptr: u64) -> Option<CommandCompletionTRB> {
-        // TODO update this code to use interrupt notification system
-        self.regs.lock().get_doorbell_regster(0).reg.write(0);
+        // send command
+        without_interrupts(|| {
+            self.regs.lock().get_doorbell_regster(0).reg.write(0);
+        });
+        debug!("Waiting");
+        let max_time = PIT::current_time() + COMMAND_WAIT_TIMEOUT;
         loop {
-            let trb = self.poll_event_ring_trb()?;
-            match trb {
-                TRBType::CommandCompletion(c) => {
-                    if c.trb_pointer == ptr {
-                        return Some(c);
-                    }
+            let current_status = without_interrupts(|| {
+                self.info.read().event_ring.as_ref().expect("").segment_status.get(&ptr).cloned()
+            });
+            if let Some(trb) = current_status {
+                if let TRBType::CommandCompletion(trb) = trb {
+                    return Some(trb);
                 }
-                _ => {}
+            }
+            if PIT::current_time() < max_time {
+                sleep(Duration::from_millis(1));
+            } else {
+                return None;
             }
         }
     }
@@ -804,6 +800,7 @@ impl XHCI {
             ).expect("")
         });
         // Activate Entry
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         self.info.write().device_contexts[slot - 1] = Some(dev_ctx);
         self.info.write().device_context_baa.as_mut().expect("").entries[slot] = ctx_ptr;
         self.info.write().transfer_rings[slot - 1] = Some(transfer_ring);
@@ -843,6 +840,7 @@ impl XHCI {
         setup.metadata.set_trb_type(TRB_TYPE_SETUP as u8);
         setup.metadata.set_trt(setup_trt);
         setup.int_target_trb_length.set_trb_length(8); // Always 8: Section 6.4.1.2.1, Table 6-25
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { setup });
 
@@ -864,18 +862,21 @@ impl XHCI {
             data.meta.set_trb_type(TRB_TYPE_DATA as u8);
             data.meta.set_eval_next(true);
             data.meta.set_chain(true);
+            trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
             self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
                 .expect("").push(TRB { data }).as_u64();
         }
         // Event Data TRB
         let mut evnt_data = EventDataTRB::default();
         evnt_data.meta.set_trb_type(TRB_TYPE_EVENT_DATA as u8);
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { event_data: evnt_data });
         // Status TRB
         let mut status_stage = StatusStageTRB::default();
         status_stage.meta.set_trb_type(TRB_TYPE_STATUS as u8);
         status_stage.meta.set_ioc(true);
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         self.info.write().transfer_rings[slot_id as usize - 1].as_mut()
             .expect("").push(TRB { status_stage });
 
@@ -1035,7 +1036,6 @@ impl XHCI {
         } else {
             String::from("")
         };
-        debug!("[XHCI] New device: \nMFG: {}\nPrd:{}\nSerial:{}", mfg, prd, serial);
 
         let usb_dev = Arc::new(USBXHCIDevice {
             // Device
@@ -1081,7 +1081,6 @@ impl XHCI {
         // let lun = if lun[0] == 0xFF { 0x0 } else {lun[0]};
         // debug!("MAX LUN: {}", lun);
         // GET MAX LUN END
-        debug!("[XHCI] Completed setup port {} on slot {}", port_id, slot);
         return Ok(slot as u8);
     }
 
@@ -1143,7 +1142,8 @@ impl XHCI {
     /// @Ok(opened_slot: u8)
     pub fn send_slot_enable(&self) -> Result<u8, USBError> {
         let cmd = CommandTRB::enable_slot();
-        let ptr = self.info.try_write().expect("lock fuck").command_ring.as_mut()
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
+        let ptr = self.info.write().command_ring.as_mut()
             .expect("no cmd ring found").push(cmd.into()).as_u64();
         trace!("[XHCI] Sending Slot EN");
         match self.wait_command_complete(ptr) {
@@ -1153,6 +1153,7 @@ impl XHCI {
     }
 
     pub fn poll_ports(&self) {
+        trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
         let max_port = self.info.read().max_port;
         for port in 1..=max_port {
             self.poll_port_status(port);
@@ -1161,12 +1162,13 @@ impl XHCI {
 
 
     pub fn send_nop(&self) {
-        let ptr = {
+        let ptr = without_interrupts(|| {
+            trace!("[XHCI] Try lock xhci.info: {}:{}", line!(), file!());
             let mut info = self.info.write();
             let cmd_ring = info.command_ring.as_mut().expect("uninitialized");
             debug!("[XHCI] Sending NOOP on index {:?}", cmd_ring.enqueue);
             cmd_ring.push(CommandTRB::noop().into()).as_u64()
-        };
+        });
         self.wait_command_complete(ptr).expect("thing");
         debug!("NoOP Complete at {:#x}", ptr);
     }

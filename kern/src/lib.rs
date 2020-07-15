@@ -72,6 +72,7 @@ pub mod memory;
 pub mod shell;
 pub mod logger;
 pub mod process;
+pub mod filesystem;
 
 lazy_static! {
     static ref PAGE_TABLE: RwLock<RecursivePageTable<'static>> = {
@@ -198,8 +199,8 @@ pub extern fn kernel_initialization_process() {
     GLOBAL_PCI.lock().initialize_bus_with_devices();
 
     // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
+    // let usbproc = Process::new_kern(usb_process as u64);
+    // SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {

@@ -25,6 +25,9 @@ all: $(iso)
 bochs: $(iso)
 	bochs -q
 
+net: $(kernel)
+	cp $(kernel) /srv/tftp/kernel.bin
+
 copy: $(kernel)
 	@cp $(grub_cfg) $(DEVICE)/boot/grub/grub.cfg
 	cp $(kernel) $(DEVICE)/boot/kernel.bin

@@ -10,6 +10,7 @@ edition = "2018"
 crate-type = ["staticlib"]
 
 [dependencies]
+acpi = "1.0.0"
 pc-keyboard = "0.5.0"
 x86_64 = { path="../libs/x86_64" }
 cpuio = "0.3.0"

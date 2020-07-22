@@ -130,6 +130,11 @@ impl Shell {
 
     fn process_command(&mut self, command: &Command) -> Result<i8, ()> {
         match command.path() {
+            "reboot" => {
+                let zero = 0u64;
+                unsafe { asm!("mov cr3, {0}", in(reg) zero) };
+                Ok(0)
+            },
             "echo" => {
                 for (i, v) in command.args.iter().enumerate() {
                     if i == 0 {

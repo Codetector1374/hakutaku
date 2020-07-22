@@ -70,7 +70,7 @@ impl BlockDeviceManager {
         let parts = scan_for_partitions(dev.as_ref());
         for p in parts {
             let child_dev = PartitionBlockDevice::new(p.clone(), dev.clone());
-            let name = self.register_device(&device_name, Arc::new(child_dev));
+            self.register_device(&device_name, Arc::new(child_dev));
         }
         device_name
     }

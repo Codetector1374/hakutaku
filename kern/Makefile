@@ -1,11 +1,13 @@
 arch ?= x86_64
 kernel := build/kernel-$(arch).bin
+kernel_elf := build/kernel-$(arch).elf
 target ?= $(arch)-unknown-none
 iso := build/os-$(arch).iso
 rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
+						 -smp cpus=4 \
 						 -boot order=d \
 						 -device qemu-xhci \
 						 -drive id=main_disk,file=ext/demo.img,if=none \
@@ -59,11 +61,14 @@ $(iso): $(kernel) $(grub_cfg)
 	@grub-mkrescue -o $(iso) build/isofiles
 	@rm -r build/isofiles
 
-$(kernel): kernel $(assembly_object_files) $(linker_script) $(rust_os)
-	@ld -n -T $(linker_script) -o $(kernel) \
+$(kernel): $(kernel_elf)
+	cp $(kernel_elf) $(kernel)
+
+$(kernel_elf): kernel $(assembly_object_files) $(linker_script) $(rust_os)
+	@ld -n -T $(linker_script) -o $(kernel_elf) \
 	$(assembly_object_files) $(rust_os)
 
 # compile assembly files
 build/arch/$(arch)/%.o: src/arch/$(arch)/%.asm
 	@mkdir -p $(shell dirname $@)
-	@nasm -felf64 $< -o $@
+	@nasm -felf64 -Wno-other $< -o $@

@@ -77,12 +77,12 @@ impl Process {
     /// Returns `false` in all other cases.
     pub fn ready(&mut self) -> bool {
         let mut state = core::mem::replace(&mut self.state, State::Ready);
-        let lmao = match state {
+        let is_ready = match state {
             Ready => true,
-            State::Waiting(ref mut lol) => lol(self),
+            State::Waiting(ref mut polling_fn) => polling_fn(self),
             _ => false
         };
-        core::mem::replace(&mut self.state, state);
-        return lmao;
+        self.state = state;
+        return is_ready;
     }
 }

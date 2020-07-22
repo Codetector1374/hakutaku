@@ -123,13 +123,13 @@ impl PCIController {
         self.scan_pci_bus();
         let bus = self.enumerate_pci_bus();
         for dev in bus.into_iter() {
-            trace!("PCIDevice on {} int: {}", dev.bus_location_str(), dev.get_int_line());
             match dev.info.class {
                 PCIDeviceClass::MassStorageController(mass_storage) => {
                     match mass_storage {
                         PCIClassMassStorage::SATA(sata) => {
                             match sata {
                                 PCIClassMassStroageSATA::AHCI => {
+                                    debug!("AHCI on {} ", dev.bus_location_str());
                                     G_AHCI.initialize_device(dev)
                                 },
                                 _ => {}
@@ -141,6 +141,7 @@ impl PCIController {
                 PCIDeviceClass::SerialBusController(serialbus) => {
                     match serialbus {
                         PCISerialBusController::USBController(usb_ctlr) => {
+                            debug!("USB on {} ", dev.bus_location_str());
                             G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
                         },
                         _ => {}

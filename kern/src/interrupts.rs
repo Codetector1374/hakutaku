@@ -92,6 +92,7 @@ extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFr
     let faulting_addr = Cr2::read();
 
     if faulting_addr.as_u64() >= MMIO_BASE {
+        error!("Error: {:?}", _ec);
         error!("Faulting ADDR: {:?}", faulting_addr);
         panic!("MMIO FAULT");
     }

@@ -170,8 +170,8 @@ impl Scheduler {
         }
         match self.processes.front().expect("no proc?").state {
             Running => {
-                let mut proc = self.processes.pop_front().expect("Process!");
-                let pid = self.cpus.current_cpu().current_pid.expect("is Running");
+                let mut proc = self.processes.pop_front().expect("Switching out nothing?");
+                let pid = self.cpus.current_cpu().current_pid.expect("No process is running?");
                 if pid != proc.pid {
                     error!("Wrong process {} running vs {}", pid, proc.pid);
                 }

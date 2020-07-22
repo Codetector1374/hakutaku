@@ -1,7 +1,7 @@
 global long_mode_start
 extern kinit
 
-section .text_init_long
+section .text_init.long
 bits 64
 long_mode_start:
     mov ax, 0
@@ -11,5 +11,6 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
     ; GOTO RUST KERNEL
-    jmp kinit
+    mov rax, kinit
+    jmp rax
     hlt

@@ -47,9 +47,9 @@ enable_paging:
 
 set_up_page_tables:
     ; Recursive P4 entry 511
-    mov eax, p4_table
-    or eax, 0b11;
-    mov [p4_table + 8 * 511], eax
+    ; mov eax, p4_table
+    ; or eax, 0b11;
+    ; mov [p4_table + 8 * 511], eax
 
     ; map first P4 entry to P3 table
     mov eax, p3_table
@@ -72,8 +72,31 @@ set_up_page_tables:
    mov [p2_table + ecx * 8], eax ; map ecx-th entry
 
    inc ecx            ; increase counter
-   cmp ecx, 512       ; if counter == 512, the whole P2 table is mapped
+   cmp ecx, 32       ; if counter == 32, the 64M of mem is mapped
    jne .map_p2_table  ; else map the next entry
+
+; Setup Kernel P3 Table (PDP)
+
+    ; 256th entry poins to the kp3table (this is 0xFFFF800000000000)
+    mov eax, k_p3_table
+    or eax, 0b11
+    mov [p4_table + 8 * 256], eax
+
+    mov eax, k_p2_table
+    or eax, 0b11
+    mov [k_p3_table], eax
+
+    mov ecx, 0  ;counter
+.map_kp2_table:
+    mov eax, 0x200000 ; 2MiB
+    mul ecx
+    add eax, 0x200000 ; 2MiB
+    or eax, 0b10000011   ; present + write + huge page
+    mov [k_p2_table + ecx * 8], eax
+
+    inc ecx
+    cmp ecx, 32
+    jne .map_kp2_table
 
    ret
 
@@ -147,7 +170,7 @@ check_multiboot:
     mov al, "M" ;; ERROR: Not Loaded by Multiboot
     jmp error
 
-section .bss
+section .bss_init
 align 4096
 p4_table:
     resb 4096
@@ -155,13 +178,18 @@ p3_table:
     resb 4096
 p2_table:
     resb 4096
+k_p3_table:
+    resb 4096
+k_p2_table:
+    resb 4096
+
 align 16 ; stack needs to be 16 aligned
 stack_bottom:
     resb 4096 * 4
 stack_top:
 
 
-section .rodata
+section .rodata.init
 gdt64:
     dq 0 ; zero entry
 .code: equ $ - gdt64 ; new

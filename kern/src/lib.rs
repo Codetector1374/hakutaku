@@ -38,6 +38,9 @@ use crate::device::ahci::G_AHCI;
 use x86_64::registers::control::Cr0Flags;
 use alloc::string::String;
 use crate::device::usb::G_USB;
+use x86_64::instructions::hlt;
+use crate::arch::x86_64::KernACPIHandler;
+use acpi::Acpi;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -72,6 +75,7 @@ pub mod memory;
 pub mod shell;
 pub mod logger;
 pub mod process;
+pub mod arch;
 
 lazy_static! {
     static ref PAGE_TABLE: RwLock<RecursivePageTable<'static>> = {
@@ -88,6 +92,7 @@ lazy_static! {
 #[cfg_attr(not(test), global_allocator)]
 pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+pub static ACPI: RwLock<Option<Acpi>> = RwLock::new(None);
 
 fn kern_init(boot_info: &BootInformation) {
     gdt::init();
@@ -165,15 +170,40 @@ fn kern_init(boot_info: &BootInformation) {
     trace!("starting clock");
     GLOBAL_PIT.write().start_clock();
 
+    let mut acpi_handler = KernACPIHandler{};
+    let acpitable = unsafe { acpi::search_for_rsdp_bios(&mut acpi_handler) };
+    match acpitable {
+        Ok(acpitable) => {
+            ACPI.write().replace(acpitable);
+            info!("[ACPI] ACPI Table Loaded");
+        },
+        Err(e) => {
+            error!("[ACPI] Failed to located ACPI: {:?}", e);
+        }
+    }
+
     unsafe {
         SCHEDULER.initialize();
     }
 }
 
+extern "C" {
+    static mut __kernel_start: u64;
+    static mut __kernel_end: u64;
+}
+
 #[no_mangle]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
+    println!("Multiboot at {:#x}", multiboot_ptr);
     unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+
+    unsafe {
+        println!("Kern Start - End: {:#08x} - {:#08x}", (&__kernel_start) as *const u64 as u64, (&__kernel_end) as *const u64 as u64);
+    }
+    loop {
+        hlt();
+    }
 
     kern_init(&boot_info);
 
@@ -183,6 +213,7 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     let mfg_string = x86_64::instructions::cpuid::mfgid();
     let str = String::from_utf8_lossy(&mfg_string).into_owned();
     println!("I'm running on {}", &str);
+
     println!("Kernel Core Ready");
 
     // Load the first process
@@ -195,11 +226,11 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
 pub extern fn kernel_initialization_process() {
     // PCI
-    GLOBAL_PCI.lock().initialize_bus_with_devices();
-
-    // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
+    // GLOBAL_PCI.lock().initialize_bus_with_devices();
+    //
+    // // Usb Proc
+    // let usbproc = Process::new_kern(usb_process as u64);
+    // SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {

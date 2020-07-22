@@ -6,19 +6,29 @@ SECTIONS {
     .boot :
     {
         KEEP(*(.multiboot_header))
+        KEEP(*(.text_init .text_init.*))
     }
 
-    .text :
+    .rodata.init : {
+        *(.rodata.init)
+    }
+
+    .bss_init :
     {
-        KEEP(*(.text.init))
+        *(.bss_init)
+    }
+
+    . = 0xFFFF800000000000;
+
+    __kernel_start = .;
+    .kernel : AT ( 0x200000 )
+    {
         *(.text .text.*)
-    }
-
-    .rodata : {
         *(.rodata .rodata.*)
-    }
-
-    .data.rel.ro : {
         *(.data.rel.ro.local*) *(.data.rel.ro .data.rel.ro.*)
+        *(*)
     }
+    . = ALIGN(4K);
+
+    __kernel_end = .;
 }

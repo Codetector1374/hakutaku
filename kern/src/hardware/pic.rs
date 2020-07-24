@@ -80,7 +80,7 @@ impl ChainedPics {
         /* Port 0x80 is used for 'checkpoints' during POST. */
         /* The Linux kernel seems to think it is free for use :-/ */
         let mut wait_port: Port<u8> = Port::new(0x80);
-        let mut wait = || { wait_port.write(0); };
+        let mut wait = || { wait_port.write(0x69); };
 
         // let saved_mask1 = self.pics[0].data.read() & !0b100u8;
         let saved_mask1 = 0b11111000;
@@ -109,7 +109,9 @@ impl ChainedPics {
         wait();
 
         self.pics[0].data.write(saved_mask1);
+        wait();
         self.pics[1].data.write(saved_mask2);
+        wait();
     }
 
     pub fn handles_interrupt(&self, int_id: u8) -> bool {

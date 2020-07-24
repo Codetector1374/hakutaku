@@ -13,12 +13,12 @@
 use core::fmt::Write;
 use core::cmp::max;
 use core::borrow::BorrowMut;
-use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, MapperAllSizes, Mapper, Page, PageTableFlags, FrameAllocator, Size2MiB};
+use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, MapperAllSizes, Mapper, Page, PageTableFlags, FrameAllocator, Size2MiB, PhysFrame};
 use x86_64::{VirtAddr, PhysAddr};
 use lazy_static::lazy_static;
 use spin::{Mutex, MutexGuard, RwLock};
 use crate::interrupts::{PICS, InterruptIndex};
-use crate::memory::paging::P4_PAGETBALE;
+use crate::memory::paging::{P4_PAGETBALE, KERNEL_TEXT_BASE, PHYSMAP_BASE};
 use crate::memory::{align_up, align_down};
 use crate::memory::frame_allocator::{SegmentFrameAllocator, MemorySegment};
 use crate::memory::allocator::Allocator;
@@ -113,10 +113,9 @@ extern "C" {
 #[no_mangle]
 #[naked]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
-
     println!("Multiboot at {:#x}", multiboot_ptr);
     unsafe { crate::logger::init_logger() };
-    let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+    let boot_info = unsafe { multiboot2::load(multiboot_ptr + KERNEL_TEXT_BASE as usize) };
 
     kern_init(boot_info);
 
@@ -148,7 +147,15 @@ fn kern_init(boot_info: BootInformation) {
     let kernel_start = unsafe { &__kernel_start as *const u64 as u64 };
     let kernel_end = unsafe { &__kernel_end as *const u64 as u64 };
     let kernel_end_pa = kernel_end & !0xFFFFFFFF80000000u64;
+    let max_phys_mem = mem_tags.memory_areas().fold(0u64, |prev_max, x| {
+        if x.end_address() > prev_max {
+            x.end_address()
+        } else{
+            prev_max
+        }
+    });
     debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start , kernel_end, kernel_end_pa);
+    debug!("Max PhysMem {:#x}", max_phys_mem);
 
     let max_kern_mem = 32u64 * 1024 * 1024; // Reserved 32 MB
 
@@ -176,11 +183,7 @@ fn kern_init(boot_info: BootInformation) {
         });
     }
 
-    let total_mem: usize = FRAME_ALLOC.lock().free_space();
-    debug!("[FALLOC] Registered {} MiB of usable memory.", total_mem / 1024 / 1024 );
-
     // Migrate Kernel Page Table
-
     // Step 1: Allocate Root Table
     let pml4_frame = LOW_FALLOC.lock().allocate_frame().expect("");
     let pml4 = unsafe { &mut *(pml4_frame.start_address().as_u64() as *mut PageTable) };
@@ -188,7 +191,7 @@ fn kern_init(boot_info: BootInformation) {
     {
         let mut kpdps = KERNEL_PDPS.write();
         for i in 0..256usize  {
-            let addr = PhysAddr::new(&kpdps[i] as *const PageTable as u64);
+            let addr = PhysAddr::new(&kpdps[i] as *const PageTable as u64 - KERNEL_TEXT_BASE);
             pml4[i + 256].set_addr(addr, PageTableFlags::WRITABLE | PageTableFlags::PRESENT);
             kpdps[i].zero();
         }
@@ -202,21 +205,62 @@ fn kern_init(boot_info: BootInformation) {
         (&mut kpdps[255])[510].set_addr(pd_kern_text_start_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
 
+    // Step 2: Create Identity Map in PhysMap region
+    let phys_map_max = if max_phys_mem < 4 * 1024 * 1024 * 1024u64 {
+        debug!("less than 4GB of phys mem is detected. Phys map will expand to 4GB");
+        4 * 1024 * 1024 * 1024
+    } else {
+        PhysAddr::new(max_phys_mem).align_up(2 * 1024 * 1024u64).as_u64()
+    };
+    debug!("Physmap will be from 0 to {:#x}", phys_map_max);
+
+    {
+        let mut kpdps = KERNEL_PDPS.write();
+
+        let mut saved_frame: Option<PhysFrame> = None;
+        let mut backup_frame_cnt = 0;
+        for pa in (0..phys_map_max).step_by(2 * 1024 * 1024) {
+            if saved_frame.is_none() {
+                saved_frame = Some(FRAME_ALLOC.lock().allocate_frame().expect(""));
+            }
+            //
+            // let selected = if saved_frame.unwrap().start_address().as_u64() < pa {
+            //     saved_frame.unwrap()
+            // } else {
+            //     backup_frame_cnt += 1;
+            //     LOW_FALLOC.lock().allocate_frame().expect("")
+            // };
+
+            let va = VirtAddr::new(pa) + PHYSMAP_BASE;
+            assert!(!pml4[va.p4_index()].is_unused(), "PML4 table has unmapped entry in kaddr");
+            assert!(u16::into(u16::from(va.p4_index())) >= 256u16, "VA in incorrect range");
+            if kpdps[va.p4_index() - 256][va.p3_index()] {
+
+            }
+
+        }
+    }
+
+    // ============================ PAGE TABLE SWAP!!!! ======================================
     unsafe { x86_64::registers::control::Cr3::write(pml4_frame, Cr3Flags::empty()) };
 
-    println!("Switched");
+    println!("================== \n[INIT] Switched Pagetable \n============");
+
+    let total_mem: usize = FRAME_ALLOC.lock().free_space();
+    info!("[INIT] Free memory from System Frame Allocator: {} MiB", total_mem / 1024 / 1024);
+
+    for x in boot_info.memory_map_tag().expect("").memory_areas() {
+        println!("MEM: {:#x} - {:#x}",x.start_address(), x.end_address());
+    }
 
     loop {
         hlt();
     }
 
-    println!("THING AT {:#x}", KERNEL_PDPS.read().as_ptr() as u64);
-
     // Initialize Allocator
-    let total_mem: usize = FRAME_ALLOC.lock().free_space();
-    unsafe {
-        ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), kernel_end as usize + total_mem);
-    }
+    // unsafe {
+    //     ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), kernel_end as usize + total_mem);
+    // }
 
     // ENABLE Interrupt at the END
     x86_64::instructions::interrupts::enable();

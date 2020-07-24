@@ -22,18 +22,21 @@ __________________|____________|__________________|_________|___________________
 use spin::RwLock;
 use x86_64::structures::paging::PageTable;
 use alloc::boxed::Box;
+use x86_64::PhysAddr;
 
 extern "C" {
     static mut __kernel_pdps: u64;
 }
 
-pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF80000000;
+pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF_80000000;
+pub const PHYSMAP_BASE: u64     = 0xFFFF8000_00000000;
+
 pub const P4_PAGETBALE: usize = 0xffffffff_fffff000;
 
 lazy_static! {
     pub static ref KERNEL_PDPS: RwLock<Box<[PageTable; 256]>> = {
         RwLock::new(unsafe {
-            Box::from_raw(((&__kernel_pdps as *const u64 as u64) - KERNEL_TEXT_BASE)as *mut [PageTable; 256])
+            Box::from_raw(&__kernel_pdps as *const u64 as *mut [PageTable; 256])
         })
     };
 }

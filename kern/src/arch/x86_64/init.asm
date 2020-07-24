@@ -180,7 +180,7 @@ k_p2_table:
 
 align 16 ; stack needs to be 16 aligned
 stack_bottom:
-    resb 256
+    resb 1024
 stack_top:
 
 

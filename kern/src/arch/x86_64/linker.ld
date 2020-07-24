@@ -9,7 +9,6 @@ SECTIONS {
         KEEP(*(.text_init .text_init.*))
         *(.rodata.init)
         *(.bss_init)
-        . = ALIGN(4K);
     }
 
     . = 0xFFFFFFFF80000000 + LOADADDR(.boot) + SIZEOF(.boot); /* -2 GiB */
@@ -17,12 +16,13 @@ SECTIONS {
     __kernel_start = .;
     .kernel : AT (LOADADDR(.boot) + SIZEOF(.boot))
     {
+        *(.kstack)
+        . = ALIGN(1M);
+
         *(.text .text.*)
         *(.rodata .rodata.*)
         *(.data.rel.ro.local*) *(.data.rel.ro .data.rel.ro.*)
         *(*)
-
-        *(.kstack)
 
         . = ALIGN(4K);
         __kernel_pdps = . ;

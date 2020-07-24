@@ -87,14 +87,14 @@ extern "x86-interrupt" fn xhci_handler(_stack_frame: &mut InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn page_fault_handler(_stack_frame: &mut InterruptStackFrame, _ec: PageFaultErrorCode) {
-    panic!("PAGE FAULT");
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();
+    error!("Faulting ADDR: {:?}", faulting_addr);
+    panic!("PAGE FAULT");
 
     if faulting_addr.as_u64() >= MMIO_BASE {
         error!("Error: {:?}", _ec);
-        error!("Faulting ADDR: {:?}", faulting_addr);
         panic!("MMIO FAULT");
     }
     // println!("{:#?}", stack_frame);

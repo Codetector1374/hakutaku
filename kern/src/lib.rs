@@ -35,7 +35,7 @@ use crate::process::process::Process;
 use kernel_api::syscall::sleep;
 use crate::device::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
-use x86_64::registers::control::{Cr0Flags, Cr3Flags};
+use x86_64::registers::control::{Cr0Flags, Cr3Flags, Cr3};
 use alloc::string::String;
 use crate::device::usb::G_USB;
 use x86_64::instructions::hlt;
@@ -150,11 +150,11 @@ fn kern_init(boot_info: BootInformation) {
     let max_phys_mem = mem_tags.memory_areas().fold(0u64, |prev_max, x| {
         if x.end_address() > prev_max {
             x.end_address()
-        } else{
+        } else {
             prev_max
         }
     });
-    debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start , kernel_end, kernel_end_pa);
+    debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start, kernel_end, kernel_end_pa);
     debug!("Max PhysMem {:#x}", max_phys_mem);
 
     let max_kern_mem = 32u64 * 1024 * 1024; // Reserved 32 MB
@@ -190,7 +190,7 @@ fn kern_init(boot_info: BootInformation) {
     pml4.zero();
     {
         let mut kpdps = KERNEL_PDPS.write();
-        for i in 0..256usize  {
+        for i in 0..256usize {
             let addr = PhysAddr::new(&kpdps[i] as *const PageTable as u64 - KERNEL_TEXT_BASE);
             pml4[i + 256].set_addr(addr, PageTableFlags::WRITABLE | PageTableFlags::PRESENT);
             kpdps[i].zero();
@@ -204,6 +204,14 @@ fn kern_init(boot_info: BootInformation) {
         }
         (&mut kpdps[255])[510].set_addr(pd_kern_text_start_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
+
+    // Borrow the old PT's PML4[0] table
+    let old_pml4: &mut PageTable = unsafe { &mut *VirtAddr::new(Cr3::read().0.start_address().as_u64()).as_mut_ptr() };
+    pml4[0] = old_pml4[0].clone();
+
+    // ============================ PAGE TABLE SWAP!!!! ======================================
+    unsafe { x86_64::registers::control::Cr3::write(pml4_frame, Cr3Flags::empty()) };
+    println!("================== \n[INIT] Switched Pagetable \n============");
 
     // Step 2: Create Identity Map in PhysMap region
     let phys_map_max = if max_phys_mem < 4 * 1024 * 1024 * 1024u64 {
@@ -220,37 +228,48 @@ fn kern_init(boot_info: BootInformation) {
         let mut saved_frame: Option<PhysFrame> = None;
         let mut backup_frame_cnt = 0;
         for pa in (0..phys_map_max).step_by(2 * 1024 * 1024) {
-            if saved_frame.is_none() {
-                saved_frame = Some(FRAME_ALLOC.lock().allocate_frame().expect(""));
-            }
-            //
-            // let selected = if saved_frame.unwrap().start_address().as_u64() < pa {
-            //     saved_frame.unwrap()
-            // } else {
-            //     backup_frame_cnt += 1;
-            //     LOW_FALLOC.lock().allocate_frame().expect("")
-            // };
-
             let va = VirtAddr::new(pa) + PHYSMAP_BASE;
             assert!(!pml4[va.p4_index()].is_unused(), "PML4 table has unmapped entry in kaddr");
-            assert!(u16::into(u16::from(va.p4_index())) >= 256u16, "VA in incorrect range");
-            if kpdps[va.p4_index() - 256][va.p3_index()] {
+            assert!(u16::from(va.p4_index()) >= 256u16, "VA in incorrect range");
+            if kpdps[usize::from(va.p4_index()) - 256][va.p3_index()].is_unused() {
+                if saved_frame.is_none() {
+                    saved_frame = Some(FRAME_ALLOC.lock().allocate_frame().expect(""));
+                }
 
+                let selected = if saved_frame.unwrap().start_address().as_u64() < pa {
+                    saved_frame.unwrap()
+                } else {
+                    backup_frame_cnt += 1;
+                    LOW_FALLOC.lock().allocate_frame().expect("")
+                };
+
+                kpdps[usize::from(va.p4_index()) - 256][va.p3_index()]
+                    .set_addr(selected.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
             }
 
+            let p2_table_addr = kpdps[usize::from(va.p4_index()) - 256][va.p3_index()].addr();
+            let p2_table_addr =
+                if p2_table_addr.as_u64() < 32 * 1024 * 1024 {
+                    VirtAddr::new(p2_table_addr.as_u64())
+                } else {
+                    VirtAddr::new(p2_table_addr.as_u64()) + PHYSMAP_BASE
+                };
+            let p2_table: &mut PageTable = unsafe { &mut *(p2_table_addr.as_mut_ptr()) };
+            p2_table[va.p2_index()]
+                .set_addr(PhysAddr::new(pa),
+                          PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE);
         }
+        debug!("[INIT] {} low_falloc pages used for PhysMap", backup_frame_cnt);
     }
-
-    // ============================ PAGE TABLE SWAP!!!! ======================================
-    unsafe { x86_64::registers::control::Cr3::write(pml4_frame, Cr3Flags::empty()) };
-
-    println!("================== \n[INIT] Switched Pagetable \n============");
+    // Unmap the initial thing
+    pml4[0].set_unused();
+    x86_64::instructions::tlb::flush_all();
 
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
     info!("[INIT] Free memory from System Frame Allocator: {} MiB", total_mem / 1024 / 1024);
 
     for x in boot_info.memory_map_tag().expect("").memory_areas() {
-        println!("MEM: {:#x} - {:#x}",x.start_address(), x.end_address());
+        println!("MEM: {:#x} - {:#x}", x.start_address(), x.end_address());
     }
 
     loop {

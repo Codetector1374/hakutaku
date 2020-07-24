@@ -46,11 +46,6 @@ enable_paging:
     ret
 
 set_up_page_tables:
-    ; Recursive P4 entry 511
-    ; mov eax, p4_table
-    ; or eax, 0b11;
-    ; mov [p4_table + 8 * 511], eax
-
     ; map first P4 entry to P3 table
     mov eax, p3_table
     or eax, 0b11 ; present + writable
@@ -80,17 +75,17 @@ set_up_page_tables:
     ; 256th entry poins to the kp3table (this is 0xFFFF800000000000)
     mov eax, k_p3_table
     or eax, 0b11
-    mov [p4_table + 8 * 256], eax
+    mov [p4_table + 8 * 511], eax
 
     mov eax, k_p2_table
     or eax, 0b11
-    mov [k_p3_table], eax
+    mov [k_p3_table + 8 * 510], eax
 
     mov ecx, 0  ;counter
 .map_kp2_table:
     mov eax, 0x200000 ; 2MiB
     mul ecx
-    add eax, 0x200000 ; 2MiB
+    ;add eax, 0x200000
     or eax, 0b10000011   ; present + write + huge page
     mov [k_p2_table + ecx * 8], eax
 
@@ -185,7 +180,7 @@ k_p2_table:
 
 align 16 ; stack needs to be 16 aligned
 stack_bottom:
-    resb 4096 * 4
+    resb 256
 stack_top:
 
 

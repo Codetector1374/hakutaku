@@ -3,7 +3,7 @@
 #![feature(ptr_internals)]
 #![feature(asm)]
 #![feature(panic_info_message)]
-#![feature(abi_x86_interrupt)]
+#![feature(abi_x86_interrupt, naked_functions)]
 #![feature(alloc_error_handler)]
 #![allow(unused_imports, dead_code)]
 #![allow(deprecated)]
@@ -14,7 +14,7 @@ use core::fmt::Write;
 use core::cmp::max;
 use core::borrow::BorrowMut;
 use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, MapperAllSizes, Mapper, Page, PageTableFlags, FrameAllocator, Size2MiB};
-use x86_64::VirtAddr;
+use x86_64::{VirtAddr, PhysAddr};
 use lazy_static::lazy_static;
 use spin::{Mutex, MutexGuard, RwLock};
 use crate::interrupts::{PICS, InterruptIndex};
@@ -35,12 +35,14 @@ use crate::process::process::Process;
 use kernel_api::syscall::sleep;
 use crate::device::pci::GLOBAL_PCI;
 use crate::device::ahci::G_AHCI;
-use x86_64::registers::control::Cr0Flags;
+use x86_64::registers::control::{Cr0Flags, Cr3Flags};
 use alloc::string::String;
 use crate::device::usb::G_USB;
 use x86_64::instructions::hlt;
 use crate::arch::x86_64::KernACPIHandler;
 use acpi::Acpi;
+use crate::memory::paging::KERNEL_PDPS;
+use x86_64::structures::paging::page_table::PageTableEntry;
 
 extern crate stack_vec;
 extern crate kernel_api;
@@ -89,55 +91,81 @@ lazy_static! {
     };
 }
 
+lazy_static! {
+    static ref LOW_FALLOC: Mutex<SegmentFrameAllocator> = {
+        Mutex::new(SegmentFrameAllocator::new())
+    };
+}
+
 #[cfg_attr(not(test), global_allocator)]
 pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
 pub static ACPI: RwLock<Option<Acpi>> = RwLock::new(None);
 
-fn kern_init(boot_info: &BootInformation) {
+extern "C" {
+    static mut __kernel_start: u64;
+    static mut __kernel_end: u64;
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+/*                                      Kernel Entrypoint                                         */
+/* ---------------------------------------------------------------------------------------------- */
+#[no_mangle]
+#[naked]
+pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
+
+    println!("Multiboot at {:#x}", multiboot_ptr);
+    unsafe { crate::logger::init_logger() };
+    let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
+
+    kern_init(boot_info);
+
+    // Must initialize after allocator
+    hardware::keyboard::initialize();
+
+    let mfg_string = x86_64::instructions::cpuid::mfgid();
+    let str = String::from_utf8_lossy(&mfg_string).into_owned();
+    println!("I'm running on {}", &str);
+
+    println!("Kernel Core Ready");
+
+    // Load the first process
+    let mut main_proc = Process::new();
+    main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
+    main_proc.context.rip = kernel_initialization_process as u64;
+    SCHEDULER.add(main_proc);
+    SCHEDULER.start();
+}
+
+fn kern_init(boot_info: BootInformation) {
     gdt::init();
     interrupts::init_idt();
     unsafe {
         PICS.lock().initialize();
-        PICS.lock().unmask_interrupt(InterruptIndex::XHCI as u8);
     };
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
-    let elf_sections_tag = boot_info.elf_sections_tag()
-        .expect("Elf-sections tag required");
-    let kernel_start = elf_sections_tag.sections().map(|s| s.start_address())
-        .min().unwrap();
-    let kernel_end = elf_sections_tag.sections().map(|s| s.start_address() + s.size())
-        .max().unwrap();
-    let multiboot_start = boot_info.start_address();
-    let multiboot_end = multiboot_start + (boot_info.total_size() as usize);
+    let kernel_start = unsafe { &__kernel_start as *const u64 as u64 };
+    let kernel_end = unsafe { &__kernel_end as *const u64 as u64 };
+    let kernel_end_pa = kernel_end & !0xFFFFFFFF80000000u64;
+    debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start , kernel_end, kernel_end_pa);
 
-    let max_kern_mem = align_up(max(multiboot_end, kernel_end as usize), 1024 * 1024 * 2); // 2M
-    debug!("Kernel end 0x{:x}", max_kern_mem);
-    // Unmap extra memory (Only kernel is kept)
-    {
-        let mut pt = PAGE_TABLE.write();
-        for page_base in (max_kern_mem..1024 * 1024 * 1024).step_by(1024 * 1024 * 2) { // 1GB, 2MB
-            let mut res = pt.unmap(Page::<Size2MiB>::from_start_address(VirtAddr::new(page_base as u64)).expect("page align"));
-            match &mut res {
-                Err(e) => {
-                    warn!("Unmap Err @ 0x{:x}, {:?}", page_base, e);
-                }
-                _ => {}
-            }
-        }
-        x86_64::instructions::tlb::flush_all();
-    }
+    let max_kern_mem = 32u64 * 1024 * 1024; // Reserved 32 MB
+
+    debug!("MAX KERN MEM {:#x}, free: {}", max_kern_mem, max_kern_mem - kernel_end_pa);
+
+    LOW_FALLOC.lock().add_segment(MemorySegment::new(kernel_end_pa as usize, (max_kern_mem - kernel_end_pa) as usize).expect(""));
+    debug!("[LOW FALLOC] Free: {} MiB", LOW_FALLOC.lock().free_space() / 1024 / 1024);
 
     for seg in mem_tags.memory_areas() {
         let mut seg_start = seg.start_address() as usize;
         let seg_end = align_down(seg.end_address() as usize, 4096);
-        trace!("[FALLOC] chkseg: {:016X} - {:016X}", seg_start, seg_end);
-        if seg.end_address() < kernel_start {
+        trace!("[FALLOC] chkseg: {:#016X} - {:#016X}", seg_start, seg_end);
+        if seg.end_address() < max_kern_mem {
             continue;
-        } else if seg_start <= kernel_start as usize && seg.end_address() > max_kern_mem as u64 {
+        } else if seg_start <= max_kern_mem as usize && seg.end_address() > max_kern_mem as u64 {
             // Section contains kernel
-            seg_start = max_kern_mem;
+            seg_start = max_kern_mem as usize;
         }
         trace!("[FALLOC] AddSeg: {:016X} - {:016X}", seg_start, seg_end);
         without_interrupts(|| {
@@ -147,6 +175,42 @@ fn kern_init(boot_info: &BootInformation) {
             )
         });
     }
+
+    let total_mem: usize = FRAME_ALLOC.lock().free_space();
+    debug!("[FALLOC] Registered {} MiB of usable memory.", total_mem / 1024 / 1024 );
+
+    // Migrate Kernel Page Table
+
+    // Step 1: Allocate Root Table
+    let pml4_frame = LOW_FALLOC.lock().allocate_frame().expect("");
+    let pml4 = unsafe { &mut *(pml4_frame.start_address().as_u64() as *mut PageTable) };
+    pml4.zero();
+    {
+        let mut kpdps = KERNEL_PDPS.write();
+        for i in 0..256usize  {
+            let addr = PhysAddr::new(&kpdps[i] as *const PageTable as u64);
+            pml4[i + 256].set_addr(addr, PageTableFlags::WRITABLE | PageTableFlags::PRESENT);
+            kpdps[i].zero();
+        }
+
+        let pd_kern_text_start_frame = LOW_FALLOC.lock().allocate_frame().expect("");
+        let pd_kern_text_start: &mut PageTable = unsafe { &mut *(pd_kern_text_start_frame.start_address().as_u64() as *mut PageTable) };
+        pd_kern_text_start.zero();
+        for i in 0..16 {
+            pd_kern_text_start[i].set_addr(PhysAddr::new(2 * 1024 * 1024 * i as u64), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE);
+        }
+        (&mut kpdps[255])[510].set_addr(pd_kern_text_start_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+
+    unsafe { x86_64::registers::control::Cr3::write(pml4_frame, Cr3Flags::empty()) };
+
+    println!("Switched");
+
+    loop {
+        hlt();
+    }
+
+    println!("THING AT {:#x}", KERNEL_PDPS.read().as_ptr() as u64);
 
     // Initialize Allocator
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
@@ -170,13 +234,13 @@ fn kern_init(boot_info: &BootInformation) {
     trace!("starting clock");
     GLOBAL_PIT.write().start_clock();
 
-    let mut acpi_handler = KernACPIHandler{};
+    let mut acpi_handler = KernACPIHandler {};
     let acpitable = unsafe { acpi::search_for_rsdp_bios(&mut acpi_handler) };
     match acpitable {
         Ok(acpitable) => {
             ACPI.write().replace(acpitable);
             info!("[ACPI] ACPI Table Loaded");
-        },
+        }
         Err(e) => {
             error!("[ACPI] Failed to located ACPI: {:?}", e);
         }
@@ -185,43 +249,6 @@ fn kern_init(boot_info: &BootInformation) {
     unsafe {
         SCHEDULER.initialize();
     }
-}
-
-extern "C" {
-    static mut __kernel_start: u64;
-    static mut __kernel_end: u64;
-}
-
-#[no_mangle]
-pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
-    println!("Multiboot at {:#x}", multiboot_ptr);
-    unsafe { crate::logger::init_logger() };
-    let boot_info = unsafe { multiboot2::load(multiboot_ptr) };
-
-    unsafe {
-        println!("Kern Start - End: {:#08x} - {:#08x}", (&__kernel_start) as *const u64 as u64, (&__kernel_end) as *const u64 as u64);
-    }
-    loop {
-        hlt();
-    }
-
-    kern_init(&boot_info);
-
-    // Must initialize after allocator
-    hardware::keyboard::initialize();
-
-    let mfg_string = x86_64::instructions::cpuid::mfgid();
-    let str = String::from_utf8_lossy(&mfg_string).into_owned();
-    println!("I'm running on {}", &str);
-
-    println!("Kernel Core Ready");
-
-    // Load the first process
-    let mut main_proc = Process::new();
-    main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
-    main_proc.context.rip = kernel_initialization_process as u64;
-    SCHEDULER.add(main_proc);
-    SCHEDULER.start();
 }
 
 pub extern fn kernel_initialization_process() {
@@ -242,7 +269,7 @@ pub extern fn usb_process() -> ! {
     use crate::device::usb::G_USB;
 
     loop {
-        G_USB.xhci.read().iter().for_each(|c| {c.poll_ports()});
+        G_USB.xhci.read().iter().for_each(|c| { c.poll_ports() });
         sleep(Duration::from_millis(100)).unwrap();
     }
 }

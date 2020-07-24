@@ -56,7 +56,7 @@ pub struct SegmentFrameAllocator {
 impl SegmentFrameAllocator {
     pub fn new() -> SegmentFrameAllocator {
         let alloc = SegmentFrameAllocator {
-            segments: [MemorySegment::default(); 16],
+            segments: Default::default(),
             count: 0,
         };
         alloc
@@ -66,6 +66,8 @@ impl SegmentFrameAllocator {
         if self.count < 16 {
             self.segments[self.count] = segment;
             self.count += 1;
+        } else {
+            panic!("Segment count exceeded 16.");
         }
     }
 

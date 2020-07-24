@@ -133,7 +133,7 @@ pub static CONSOLE: Mutex<VGATextBuffer> = Mutex::new(VGATextBuffer {
     column_position: 0,
     row_position: BUFFER_HEIGHT - 1,
     color_code: ColorCode::new(Color::White, Color::Black),
-    buffer: unsafe { Unique::new_unchecked(0xb8000 as *mut _) }
+    buffer: unsafe { Unique::new_unchecked((0xb8000 + 0xFFFF_FFFF_8000_0000u64) as *mut _) }
 });
 
 pub fn print(args: fmt::Arguments) {

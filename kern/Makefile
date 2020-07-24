@@ -7,6 +7,7 @@ rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
+						 -m 1G \
 						 -smp cpus=4 \
 						 -boot order=d \
 						 -device qemu-xhci \

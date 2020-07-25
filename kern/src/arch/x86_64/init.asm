@@ -90,7 +90,7 @@ set_up_page_tables:
     mov [k_p2_table + ecx * 8], eax
 
     inc ecx
-    cmp ecx, 32
+    cmp ecx, 16
     jne .map_kp2_table
 
    ret

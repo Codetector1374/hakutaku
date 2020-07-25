@@ -154,7 +154,7 @@ fn kern_init(boot_info: BootInformation) {
     debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start, kernel_end, kernel_end_pa);
     debug!("Max PhysMem {:#x}", max_phys_mem);
 
-    let max_kern_mem = 16u64 * 1024 * 1024; // Reserved 32 MB
+    let max_kern_mem = 16u64 * 1024 * 1024; // Reserved 16 MB
 
     debug!("MAX KERN MEM {:#x}, free: {}", max_kern_mem, max_kern_mem - kernel_end_pa);
 
@@ -231,12 +231,13 @@ fn kern_init(boot_info: BootInformation) {
             assert!(!pml4[va.p4_index()].is_unused(), "PML4 table has unmapped entry in kaddr");
             assert!(u16::from(va.p4_index()) >= 256u16, "VA in incorrect range");
             if kpdps[usize::from(va.p4_index()) - 256][va.p3_index()].is_unused() {
+                debug!("[PhysMap] Mapping in [{}]kPDPs[{}]", usize::from(va.p4_index()), usize::from(va.p3_index()));
                 if saved_frame.is_none() {
                     saved_frame = Some(FRAME_ALLOC.lock().allocate_frame().expect(""));
                 }
 
-                let selected = if saved_frame.unwrap().start_address().as_u64() < pa {
-                    saved_frame.unwrap()
+                let selected = if saved_frame.as_ref().unwrap().start_address().as_u64() < pa {
+                    saved_frame.take().unwrap()
                 } else {
                     backup_frame_cnt += 1;
                     LOW_FALLOC.lock().allocate_frame().expect("")
@@ -267,10 +268,6 @@ fn kern_init(boot_info: BootInformation) {
 
     let total_mem: usize = FRAME_ALLOC.lock().free_space();
     info!("[INIT] Free memory from System Frame Allocator: {} MiB", total_mem / 1024 / 1024);
-
-    for x in boot_info.memory_map_tag().expect("").memory_areas() {
-        println!("MEM: {:#x} - {:#x}", x.start_address(), x.end_address());
-    }
 
     // Initialize Allocator
     unsafe {

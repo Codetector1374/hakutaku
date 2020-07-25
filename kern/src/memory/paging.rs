@@ -34,6 +34,7 @@ pub static KERNEL_PML4_TABLE: Mutex<Option<Box<PageTable>>> = Mutex::new(None);
 pub const PHYSMAP_BASE: u64     = 0xFFFF8000_00000000;
 pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF_80000000;
 pub const KERNEL_HEAP_BASE: u64 = 0xFFFFFFFF_a0000000;
+pub const KERNEL_HEAP_TOP:  u64 = 0xFFFFFFFF_c0000000;
 
 lazy_static! {
     pub static ref KERNEL_PDPS: RwLock<Box<[PageTable; 256]>> = {

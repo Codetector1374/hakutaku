@@ -60,7 +60,7 @@ use crate::interrupts::{InterruptIndex, PICS};
 use crate::memory::{align_down, align_up};
 use crate::memory::allocator::Allocator;
 use crate::memory::frame_allocator::{MemorySegment, SegmentFrameAllocator};
-use crate::memory::paging::{KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE, KERNEL_HEAP_BASE};
+use crate::memory::paging::{KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE, KERNEL_HEAP_BASE, KERNEL_HEAP_TOP};
 use crate::memory::paging::KERNEL_PDPS;
 use crate::process::process::Process;
 use crate::process::scheduler::GlobalScheduler;
@@ -154,7 +154,7 @@ fn kern_init(boot_info: BootInformation) {
     debug!("Kern Start - End: {:#08x} - {:#08x} ({:#x})", kernel_start, kernel_end, kernel_end_pa);
     debug!("Max PhysMem {:#x}", max_phys_mem);
 
-    let max_kern_mem = 32u64 * 1024 * 1024; // Reserved 32 MB
+    let max_kern_mem = 16u64 * 1024 * 1024; // Reserved 32 MB
 
     debug!("MAX KERN MEM {:#x}, free: {}", max_kern_mem, max_kern_mem - kernel_end_pa);
 
@@ -277,7 +277,7 @@ fn kern_init(boot_info: BootInformation) {
         ALLOCATOR.initialize
         (
             KERNEL_HEAP_BASE as usize,
-            KERNEL_HEAP_BASE as usize
+            min(KERNEL_HEAP_TOP, KERNEL_HEAP_BASE.saturating_add(total_mem as u64)) as usize
         );
     }
     debug!("[kALLOC] Kernel Allocator Initialized");
@@ -299,8 +299,20 @@ fn kern_init(boot_info: BootInformation) {
     trace!("starting clock");
     GLOBAL_PIT.write().start_clock();
 
+    let (rsdtaddr, version) = match boot_info.rsdp_v2_tag() {
+        Some(flag) => {
+            debug!("[ACPI] Multiboot XSDT: {:?}", flag);
+            (flag.xsdt_address(), flag.revision())
+        },
+        _ => {
+            let lol = boot_info.rsdp_v1_tag().expect("gotta have RSDP right?");
+            debug!("[ACPI] Multiboot RSDT {:?}", lol);
+            (lol.rsdt_address(), lol.revision())
+        }
+    };
+
     let mut acpi_handler = KernACPIHandler {};
-    let acpitable = unsafe { acpi::search_for_rsdp_bios(&mut acpi_handler) };
+    let acpitable = unsafe { acpi::parse_rsdt(&mut acpi_handler, version, rsdtaddr) };
     match acpitable {
         Ok(acpitable) => {
             ACPI.write().replace(acpitable);
@@ -309,10 +321,6 @@ fn kern_init(boot_info: BootInformation) {
         Err(e) => {
             error!("[ACPI] Failed to located ACPI: {:?}", e);
         }
-    }
-
-    loop {
-        hlt();
     }
 
     unsafe {

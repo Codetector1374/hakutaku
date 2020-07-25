@@ -6,7 +6,10 @@ use core::ptr;
 use crate::memory::*;
 use crate::memory::allocator::linked_list::LinkedList;
 use crate::memory::allocator::LocalAlloc;
-use x86_64::structures::paging::PageTable;
+use x86_64::structures::paging::{PageTable, FrameAllocator, Mapper, Page, Size4KiB, PhysFrame, PageTableFlags};
+use crate::FRAME_ALLOC;
+use x86_64::VirtAddr;
+use crate::memory::frame_allocator::FrameAllocWrapper;
 
 /// A simple allocator that allocates based on size classes.
 ///   bin 0 (2^3 bytes)    : handles allocations in (0, 2^3]
@@ -55,13 +58,14 @@ fn get_bin_number(mut size: usize) -> usize {
 
 impl Allocator {
     unsafe fn alloc_from_block(&mut self, layout: Layout, bin_number: usize) -> *mut u8 {
-        let old_current = self.block_current;
+        use crate::PAGE_TABLE;
+
         let aligned
             = align_up(self.block_current, layout.align());
 
-        if aligned > old_current {
-            let bin_num = get_bin_number(aligned - old_current);
-            self.bins[bin_num].push(old_current as *mut usize);
+        if aligned > self.block_current {
+            let bin_num = get_bin_number(aligned - self.block_current);
+            self.bins[bin_num].push(self.block_current as *mut usize);
         }
 
         let target = aligned.saturating_add(get_bin_size(bin_number));
@@ -69,7 +73,26 @@ impl Allocator {
             target > self.block_end {
             return core::ptr::null_mut();
         }
-        self.block_current = target;
+        let aligned_up_target = align_up(target, 4096);
+        assert!(is_aligned(self.block_current, 4096), "ALLOC CURRENT ALIGNMENT");
+
+        {
+            let mut falloc = FrameAllocWrapper{};
+            let mut pt = PAGE_TABLE.write();
+            for x in (self.block_current..aligned_up_target).step_by(4096) {
+                let frame = FRAME_ALLOC.lock().allocate_frame().expect("no frame");
+                pt.map_to(
+                    Page::<Size4KiB>::from_start_address(VirtAddr::new(x as u64)).expect(""),
+                    frame,
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+                    &mut falloc
+                ).expect("failed to map").flush();
+            }
+        }
+
+        // TODO Add target - aligned_up_target to blocks
+
+        self.block_current = aligned_up_target;
 
         return aligned as *mut u8;
     }

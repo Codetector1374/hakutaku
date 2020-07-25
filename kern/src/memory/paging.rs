@@ -15,11 +15,12 @@ ____________________________________________________________|___________________
  ffffea0000000000 |  -22    TB | ffffeaffffffffff |    1 TB | virtual memory map (vmemmap_base)
  ffffeb0000000000 |  -21    TB | ffffebffffffffff |    1 TB | ... unused hole
  ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping, mapped to physical address 0
+ ffffffffa0000000 |   -1.5  GB | ffffffffbfffffff |  512 MB | kernel heap
 __________________|____________|__________________|_________|___________________________________________________________
  */
 
 
-use spin::RwLock;
+use spin::{RwLock, Mutex};
 use x86_64::structures::paging::PageTable;
 use alloc::boxed::Box;
 use x86_64::PhysAddr;
@@ -28,10 +29,11 @@ extern "C" {
     static mut __kernel_pdps: u64;
 }
 
-pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF_80000000;
-pub const PHYSMAP_BASE: u64     = 0xFFFF8000_00000000;
+pub static KERNEL_PML4_TABLE: Mutex<Option<Box<PageTable>>> = Mutex::new(None);
 
-pub const P4_PAGETBALE: usize = 0xffffffff_fffff000;
+pub const PHYSMAP_BASE: u64     = 0xFFFF8000_00000000;
+pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF_80000000;
+pub const KERNEL_HEAP_BASE: u64 = 0xFFFFFFFF_a0000000;
 
 lazy_static! {
     pub static ref KERNEL_PDPS: RwLock<Box<[PageTable; 256]>> = {

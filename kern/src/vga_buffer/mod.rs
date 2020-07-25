@@ -122,6 +122,8 @@ impl VGATextBuffer {
 }
 
 use core::fmt;
+use crate::memory::paging::{KERNEL_TEXT_BASE};
+
 impl fmt::Write for VGATextBuffer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_str(s);
@@ -133,7 +135,7 @@ pub static CONSOLE: Mutex<VGATextBuffer> = Mutex::new(VGATextBuffer {
     column_position: 0,
     row_position: BUFFER_HEIGHT - 1,
     color_code: ColorCode::new(Color::White, Color::Black),
-    buffer: unsafe { Unique::new_unchecked((0xb8000 + 0xFFFF_FFFF_8000_0000u64) as *mut _) }
+    buffer: unsafe { Unique::new_unchecked((0xb8000 + KERNEL_TEXT_BASE) as *mut _) }
 });
 
 pub fn print(args: fmt::Arguments) {

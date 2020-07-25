@@ -11,6 +11,7 @@ impl log::Log for KernelLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
+            // Record.target
             println!("[{}] {}", record.level(), record.args());
         }
     }
@@ -19,7 +20,7 @@ impl log::Log for KernelLogger {
 }
 
 pub unsafe fn init_logger() {
-    log::set_logger_racy(&LOGGER)
+    log::set_logger(&LOGGER)
         .map(|()| {
             log::set_max_level(if let Some(_) = option_env!("VERBOSE_BUILD") {
                 LevelFilter::Trace

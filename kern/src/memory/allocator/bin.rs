@@ -1,11 +1,12 @@
 use core::alloc::Layout;
 use core::fmt;
-use core::fmt::{Debug, Formatter, Error};
+use core::fmt::{Debug, Error, Formatter};
 use core::ptr;
 
+use crate::memory::*;
 use crate::memory::allocator::linked_list::LinkedList;
 use crate::memory::allocator::LocalAlloc;
-use crate::memory::*;
+use x86_64::structures::paging::PageTable;
 
 /// A simple allocator that allocates based on size classes.
 ///   bin 0 (2^3 bytes)    : handles allocations in (0, 2^3]
@@ -40,47 +41,29 @@ fn get_bin_size(bin_number: usize) -> usize {
     1usize << (bin_number + 3)
 }
 
-// TODO Optimize
-fn get_bin_number(size: usize) -> usize {
-    match size {
-        0x0..=0x8 => 0,
-        0x9..=0x10 => 1,
-        0x11..=0x20 => 2,
-        0x21..=0x40 => 3,
-        0x41..=0x80 => 4,
-        0x81..=0x100 => 5,
-        0x101..=0x200 => 6,
-        0x201..=0x400 => 7,
-        0x401..=0x800 => 8,
-        0x801..=0x1000 => 9,
-        0x1001..=0x2000 => 10,
-        0x2001..=0x4000 => 11,
-        0x4001..=0x8000 => 12,
-        0x8001..=0x10000 => 13,
-        0x10001..=0x20000 => 14,
-        0x20001..=0x40000 => 15,
-        0x40001..=0x80000 => 16,
-        0x80001..=0x100000 => 17,
-        0x100001..=0x200000 => 18,
-        0x200001..=0x400000 => 19,
-        0x400001..=0x800000 => 20,
-        0x800001..=0x1000000 => 21,
-        0x1000001..=0x2000000 => 22,
-        0x2000001..=0x4000000 => 23,
-        0x4000001..=0x8000000 => 24,
-        0x8000001..=0x10000000 => 25,
-        0x10000001..=0x20000000 => 26,
-        0x20000001..=0x40000000 => 27,
-        0x40000001..=0x80000000 => 28,
-        0x80000001..=0x100000000 => 29,
-        _ => 30,
+fn get_bin_number(mut size: usize) -> usize {
+    let mut bin = 0usize;
+    size = (size - 1) / 8;
+
+    while size > 0 {
+        size /= 2;
+        bin += 1;
     }
+
+    bin
 }
 
 impl Allocator {
     unsafe fn alloc_from_block(&mut self, layout: Layout, bin_number: usize) -> *mut u8 {
+        let old_current = self.block_current;
         let aligned
             = align_up(self.block_current, layout.align());
+
+        if aligned > old_current {
+            let bin_num = get_bin_number(aligned - old_current);
+            self.bins[bin_num].push(old_current as *mut usize);
+        }
+
         let target = aligned.saturating_add(get_bin_size(bin_number));
         if target - get_bin_size(bin_number) != aligned ||
             target > self.block_end {
@@ -111,9 +94,9 @@ impl Allocator {
         if part_size == 0 {
             panic!("FUCK");
         }
-        assert_eq!(0, chunk_size%part_size);
-        for i in 0..(chunk_size/part_size) {
-            self.bins[bin_number].push((chunk_start + (i*part_size)) as *mut usize);
+        assert_eq!(0, chunk_size % part_size);
+        for i in 0..(chunk_size / part_size) {
+            self.bins[bin_number].push((chunk_start + (i * part_size)) as *mut usize);
         }
     }
 }
@@ -164,9 +147,9 @@ impl LocalAlloc for Allocator {
             let bin_size = get_bin_size(bin_num);
             let big_bin = &mut self.bins[bin_num];
             for chunk_in_bin in big_bin.iter_mut() {
-                assert_eq!(bin_size%alloc_bin_size, 0);
+                assert_eq!(bin_size % alloc_bin_size, 0);
                 let chunk_base = chunk_in_bin.value() as usize;
-                for subchunk_num in 0..(bin_size/alloc_bin_size) {
+                for subchunk_num in 0..(bin_size / alloc_bin_size) {
                     if (chunk_base + (subchunk_num * alloc_bin_size)) & align_check == 0 {
                         // Break this block
                         self.break_up_chunk(chunk_in_bin.pop() as usize, bin_size, bin_num);

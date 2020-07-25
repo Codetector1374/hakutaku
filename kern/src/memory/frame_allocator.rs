@@ -25,6 +25,14 @@ impl Default for MemorySegment {
 }
 
 impl MemorySegment {
+    const fn zeroed() -> MemorySegment {
+        MemorySegment {
+            start: 0,
+            size: 0,
+            current: 0,
+        }
+    }
+
     pub fn new(start: usize, size: usize) -> Result<MemorySegment, ()> {
         if is_aligned(start, FRAME_SIZE) {
             Ok(MemorySegment {
@@ -54,9 +62,9 @@ pub struct SegmentFrameAllocator {
 }
 
 impl SegmentFrameAllocator {
-    pub fn new() -> SegmentFrameAllocator {
+    pub const fn new() -> SegmentFrameAllocator {
         let alloc = SegmentFrameAllocator {
-            segments: Default::default(),
+            segments: [MemorySegment::zeroed(); 16],
             count: 0,
         };
         alloc

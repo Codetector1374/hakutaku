@@ -5,62 +5,66 @@
 #![feature(panic_info_message)]
 #![feature(abi_x86_interrupt, naked_functions)]
 #![feature(alloc_error_handler)]
+#![feature(const_fn)]
 #![allow(unused_imports, dead_code)]
 #![allow(deprecated)]
 #![feature(const_in_array_repeat_expressions)]
 #![feature(allocator_api)]
 
-use core::fmt::Write;
-use core::cmp::max;
-use core::borrow::BorrowMut;
-use x86_64::structures::paging::{RecursivePageTable, PageTable, PageTableIndex, MapperAllSizes, Mapper, Page, PageTableFlags, FrameAllocator, Size2MiB, PhysFrame};
-use x86_64::{VirtAddr, PhysAddr};
-use lazy_static::lazy_static;
-use spin::{Mutex, MutexGuard, RwLock};
-use crate::interrupts::{PICS, InterruptIndex};
-use crate::memory::paging::{P4_PAGETBALE, KERNEL_TEXT_BASE, PHYSMAP_BASE};
-use crate::memory::{align_up, align_down};
-use crate::memory::frame_allocator::{SegmentFrameAllocator, MemorySegment};
-use crate::memory::allocator::Allocator;
-use alloc::vec::Vec;
-use multiboot2::BootInformation;
-use crate::shell::Shell;
-use x86_64::instructions::interrupts::without_interrupts;
-use crate::hardware::apic::{GLOBAL_APIC, APICDeliveryMode};
-use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
-use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
-use core::time::Duration;
-use crate::process::scheduler::GlobalScheduler;
-use crate::process::process::Process;
-use kernel_api::syscall::sleep;
-use crate::device::pci::GLOBAL_PCI;
-use crate::device::ahci::G_AHCI;
-use x86_64::registers::control::{Cr0Flags, Cr3Flags, Cr3};
-use alloc::string::String;
-use crate::device::usb::G_USB;
-use x86_64::instructions::hlt;
-use crate::arch::x86_64::KernACPIHandler;
-use acpi::Acpi;
-use crate::memory::paging::KERNEL_PDPS;
-use x86_64::structures::paging::page_table::PageTableEntry;
-
-extern crate stack_vec;
-extern crate kernel_api;
-extern crate cpuio;
-extern crate spin;
-extern crate multiboot2;
-extern crate x86_64;
-extern crate pc_keyboard;
-extern crate core_io;
 #[macro_use]
 extern crate alloc;
+extern crate core_io;
+extern crate cpuio;
 extern crate hashbrown;
+extern crate kernel_api;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
 #[macro_use]
 extern crate modular_bitfield;
+extern crate multiboot2;
+extern crate pc_keyboard;
+extern crate spin;
+extern crate stack_vec;
+extern crate x86_64;
+
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::borrow::BorrowMut;
+use core::cmp::{max, min};
+use core::fmt::Write;
+use core::time::Duration;
+
+use acpi::Acpi;
+use kernel_api::syscall::sleep;
+use lazy_static::lazy_static;
+use multiboot2::BootInformation;
+use spin::{Mutex, MutexGuard, RwLock};
+use x86_64::{PhysAddr, VirtAddr};
+use x86_64::instructions::hlt;
+use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::registers::control::{Cr0Flags, Cr3, Cr3Flags};
+use x86_64::structures::paging::{FrameAllocator, Mapper, MapperAllSizes, OffsetPageTable, Page, PageTable, PageTableFlags, PageTableIndex, PhysFrame, RecursivePageTable, Size2MiB};
+use x86_64::structures::paging::page_table::PageTableEntry;
+
+use crate::arch::x86_64::KernACPIHandler;
+use crate::device::ahci::G_AHCI;
+use crate::device::pci::GLOBAL_PCI;
+use crate::device::usb::G_USB;
+use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC};
+use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
+use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
+use crate::interrupts::{InterruptIndex, PICS};
+use crate::memory::{align_down, align_up};
+use crate::memory::allocator::Allocator;
+use crate::memory::frame_allocator::{MemorySegment, SegmentFrameAllocator};
+use crate::memory::paging::{KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE, KERNEL_HEAP_BASE};
+use crate::memory::paging::KERNEL_PDPS;
+use crate::process::process::Process;
+use crate::process::scheduler::GlobalScheduler;
+use crate::shell::Shell;
 
 #[macro_use]
 pub mod vga_buffer;
@@ -80,22 +84,15 @@ pub mod process;
 pub mod arch;
 
 lazy_static! {
-    static ref PAGE_TABLE: RwLock<RecursivePageTable<'static>> = {
-        unsafe {RwLock::new(RecursivePageTable::new(&mut(*(P4_PAGETBALE as *mut PageTable))).expect("LOL"))}
+    static ref PAGE_TABLE: RwLock<OffsetPageTable<'static>> = {
+        unsafe {RwLock::new(
+            OffsetPageTable::new(&mut *(KERNEL_PML4_TABLE.lock().as_mut().unwrap().as_mut() as *mut PageTable), VirtAddr::new(PHYSMAP_BASE))
+        )}
     };
 }
 
-lazy_static! {
-    static ref FRAME_ALLOC: Mutex<SegmentFrameAllocator> = {
-        Mutex::new(SegmentFrameAllocator::new())
-    };
-}
-
-lazy_static! {
-    static ref LOW_FALLOC: Mutex<SegmentFrameAllocator> = {
-        Mutex::new(SegmentFrameAllocator::new())
-    };
-}
+pub static FRAME_ALLOC: Mutex<SegmentFrameAllocator> = Mutex::new(SegmentFrameAllocator::new());
+pub static LOW_FALLOC: Mutex<SegmentFrameAllocator> = Mutex::new(SegmentFrameAllocator::new());
 
 #[cfg_attr(not(test), global_allocator)]
 pub static ALLOCATOR: Allocator = Allocator::uninitialized();
@@ -211,6 +208,8 @@ fn kern_init(boot_info: BootInformation) {
 
     // ============================ PAGE TABLE SWAP!!!! ======================================
     unsafe { x86_64::registers::control::Cr3::write(pml4_frame, Cr3Flags::empty()) };
+    // NOW THE PAGE_TABLE is accessible.
+    KERNEL_PML4_TABLE.lock().replace(unsafe { Box::from_raw((pml4_frame.start_address().as_u64() + PHYSMAP_BASE) as *mut PageTable) });
     println!("================== \n[INIT] Switched Pagetable \n============");
 
     // Step 2: Create Identity Map in PhysMap region
@@ -261,7 +260,8 @@ fn kern_init(boot_info: BootInformation) {
         }
         debug!("[INIT] {} low_falloc pages used for PhysMap", backup_frame_cnt);
     }
-    // Unmap the initial thing
+
+    // Unmap the borrowed table
     pml4[0].set_unused();
     x86_64::instructions::tlb::flush_all();
 
@@ -272,14 +272,16 @@ fn kern_init(boot_info: BootInformation) {
         println!("MEM: {:#x} - {:#x}", x.start_address(), x.end_address());
     }
 
-    loop {
-        hlt();
-    }
-
     // Initialize Allocator
-    // unsafe {
-    //     ALLOCATOR.initialize(align_up(kernel_end as usize, 4096), kernel_end as usize + total_mem);
-    // }
+    unsafe {
+        ALLOCATOR.initialize
+        (
+            KERNEL_HEAP_BASE as usize,
+            KERNEL_HEAP_BASE as usize
+        );
+    }
+    debug!("[kALLOC] Kernel Allocator Initialized");
+
 
     // ENABLE Interrupt at the END
     x86_64::instructions::interrupts::enable();
@@ -307,6 +309,10 @@ fn kern_init(boot_info: BootInformation) {
         Err(e) => {
             error!("[ACPI] Failed to located ACPI: {:?}", e);
         }
+    }
+
+    loop {
+        hlt();
     }
 
     unsafe {

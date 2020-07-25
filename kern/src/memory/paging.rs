@@ -11,7 +11,7 @@ ____________________________________________________________|___________________
                   |            |                  |         |
  ffff800000000000 | -128    TB | ffffbfffffffffff |   64 TB | physical memory map
  ffffc00000000000 |  -64    TB | ffffdfffffffffff |   32 TB | vmalloc/ioremap space (vmalloc_base)
- ffffe00000000000 |  -32    TB | ffffe9ffffffffff |    1 TB | ... unused hole
+ ffffe00000000000 |  -32    TB | ffffefffffffffff |    1 TB | ... unused hole
  ffffea0000000000 |  -22    TB | ffffeaffffffffff |    1 TB | virtual memory map (vmemmap_base)
  ffffeb0000000000 |  -21    TB | ffffebffffffffff |    1 TB | ... unused hole
  ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping, mapped to physical address 0

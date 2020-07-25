@@ -121,6 +121,7 @@ impl PCIController {
         use self::class::*;
         info!("[PCI] Initializing PCI Devices");
         self.scan_pci_bus();
+        return;
         let bus = self.enumerate_pci_bus();
         for dev in bus.into_iter() {
             match dev.info.class {

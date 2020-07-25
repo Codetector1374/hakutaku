@@ -327,7 +327,7 @@ fn kern_init(boot_info: BootInformation) {
 
 pub extern fn kernel_initialization_process() {
     // PCI
-    // GLOBAL_PCI.lock().initialize_bus_with_devices();
+    GLOBAL_PCI.lock().initialize_bus_with_devices();
     //
     // // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);

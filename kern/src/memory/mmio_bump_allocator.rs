@@ -1,37 +1,37 @@
 use x86_64::VirtAddr;
 use spin::Mutex;
+use crate::memory::paging::{VMALLOC_BASE, VMALLOC_TOP};
 
-// TODO Remove Hard Coded Value
-
-pub const MMIO_BASE: u64 = 0xFFFF_FE00_0000_0000;
-
-pub static GMMIO_ALLOC: Mutex<MMIOAllocator> = Mutex::new(
+pub static VMALLOC: Mutex<MMIOAllocator> = Mutex::new(
     MMIOAllocator::new(
-        VirtAddr::new_truncate(0xFFFF_FEF0_0000_0000),
-        VirtAddr::new_truncate(MMIO_BASE)
+        VirtAddr::new_truncate(VMALLOC_BASE),
+        VirtAddr::new_truncate(VMALLOC_TOP)
     ));
 
 pub struct MMIOAllocator {
-    top_address: VirtAddr,
+    base_addr: VirtAddr,
     current_addr: VirtAddr,
-    limit_addr: VirtAddr,
+    top_addr: VirtAddr,
 }
 
 impl MMIOAllocator {
-    pub const fn new(top: VirtAddr, limit: VirtAddr) -> MMIOAllocator {
+    pub const fn new(base: VirtAddr, top: VirtAddr) -> MMIOAllocator {
         MMIOAllocator {
-            top_address: top,
-            current_addr: top,
-            limit_addr: limit,
+            base_addr: base,
+            current_addr: base,
+            top_addr: top,
         }
     }
 
     /// size will be round up to 4096
-    pub fn allocate(&mut self, size: usize) -> (VirtAddr, usize) {
-        let num_of_pages= (size + 4095) / 4096;
-        let size = num_of_pages * 4096;
-        self.current_addr = VirtAddr::new(self.current_addr.as_u64() - size as u64);
-        (self.current_addr,size)
+    pub fn allocate(&mut self, req_size: usize) -> (VirtAddr, usize) {
+        let num_of_pages= (req_size + 4095) / 4096;
+        let alloc_size = num_of_pages * 4096;
+        assert!(self.current_addr.is_aligned(4096u64), "VMALLOC Current Alignment");
+        let alloc_addr = self.current_addr;
+        self.current_addr += alloc_size;
+        assert!(alloc_size >= req_size, "VMALLOC Allocated less than requested");
+        (alloc_addr, alloc_size)
     }
 
 }

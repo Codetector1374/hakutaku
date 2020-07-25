@@ -3,7 +3,7 @@ use x86_64::structures::paging::{Mapper, Page, PhysFrame, PageTableFlags, Size4K
 use x86_64::{VirtAddr, PhysAddr};
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
+use crate::memory::mmio_bump_allocator::VMALLOC;
 use volatile::Volatile;
 use spin::Mutex;
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
@@ -61,7 +61,7 @@ impl APIC {
         }
         let apic_base = x86_64::registers::model_specific::IA32ApicBase::read_apic_base_addr();
         let (va, size) = without_interrupts(|| {
-            GMMIO_ALLOC.lock().allocate(4096)
+            VMALLOC.lock().allocate(4096)
         });
         trace!("[APIC] Alloc virt: {:?}, size: {}", va, size);
         let mut alloc_wrapper = FrameAllocWrapper {};

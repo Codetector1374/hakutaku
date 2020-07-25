@@ -17,7 +17,7 @@ ____________________________________________________________|___________________
  ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping, mapped to physical address 0
  ffffffffa0000000 |   -1.5  GB | ffffffffbfffffff |  512 MB | kernel heap
 __________________|____________|__________________|_________|___________________________________________________________
- */
+*/
 
 
 use spin::{RwLock, Mutex};
@@ -32,6 +32,8 @@ extern "C" {
 pub static KERNEL_PML4_TABLE: Mutex<Option<Box<PageTable>>> = Mutex::new(None);
 
 pub const PHYSMAP_BASE: u64     = 0xFFFF8000_00000000;
+pub const VMALLOC_BASE: u64     = 0xFFFFc000_00000000;
+pub const VMALLOC_TOP:  u64     = 0xFFFFe000_00000000;
 pub const KERNEL_TEXT_BASE: u64 = 0xFFFFFFFF_80000000;
 pub const KERNEL_HEAP_BASE: u64 = 0xFFFFFFFF_a0000000;
 pub const KERNEL_HEAP_TOP:  u64 = 0xFFFFFFFF_c0000000;

@@ -34,7 +34,7 @@ use crate::hardware::keyboard::blocking_get_char;
 use crate::hardware::pit::PIT;
 use crate::interrupts::InterruptIndex;
 use crate::memory::frame_allocator::FrameAllocWrapper;
-use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
+use crate::memory::mmio_bump_allocator::VMALLOC;
 
 use self::consts::*;
 use self::datastructure::*;
@@ -201,7 +201,7 @@ impl XHCI {
             let alloc_base = base.align_down(4096u64);
             trace!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
             let va_root = without_interrupts(|| {
-                let (va, size) = GMMIO_ALLOC.lock().allocate(size + base_offset);
+                let (va, size) = VMALLOC.lock().allocate(size + base_offset);
                 trace!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
                 let mut fallocw = FrameAllocWrapper {};
                 for offset in (0..size).step_by(4096) {

@@ -32,6 +32,9 @@ pub fn sleep(span: Duration) -> OsResult<Duration> {
              lateout(reg) elapsed_ms,
              lateout(reg) ecode,
              syscall_num = const NR_SLEEP,
+             lateout("rax") _,
+             lateout("rdi") _,
+             lateout("rdx") _,
              );
     }
 

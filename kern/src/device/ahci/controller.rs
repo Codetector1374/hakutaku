@@ -1,7 +1,7 @@
 use crate::PAGE_TABLE;
 use x86_64::{PhysAddr, VirtAddr};
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
+use crate::memory::mmio_bump_allocator::VMALLOC;
 use crate::device::pci::class::PCIClassMassStroageSATA::AHCI;
 use x86_64::structures::paging::{Mapper, Size4KiB, Page, PhysFrame, PageTableFlags, MapperAllSizes};
 use volatile::{ReadOnly, Volatile, WriteOnly};
@@ -239,7 +239,7 @@ impl AHCIController {
         trace!("[AHCI] PA Offset: 0x{:x} alloc_req_size: {}", base_offset, alloc_size);
         let mut fallocw = FrameAllocWrapper {};
         let va_root = without_interrupts(|| {
-            let (va, size) = GMMIO_ALLOC.lock().allocate(alloc_size);
+            let (va, size) = VMALLOC.lock().allocate(alloc_size);
             trace!("[AHCI] Allocated {} bytes VA starting: 0x{:016x}", size, va.as_u64());
             for offset in (0..size).step_by(4096) {
                 let paddr = alloc_base + offset;

@@ -1,6 +1,6 @@
 use acpi::{AcpiHandler, PhysicalMapping};
 use x86_64::{PhysAddr, VirtAddr};
-use crate::memory::mmio_bump_allocator::GMMIO_ALLOC;
+use crate::memory::mmio_bump_allocator::VMALLOC;
 use core::ptr::NonNull;
 use x86_64::structures::paging::{Mapper, Size4KiB, Page, PhysFrame, PageTableFlags};
 use core::ops::Add;

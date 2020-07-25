@@ -121,7 +121,6 @@ impl PCIController {
         use self::class::*;
         info!("[PCI] Initializing PCI Devices");
         self.scan_pci_bus();
-        return;
         let bus = self.enumerate_pci_bus();
         for dev in bus.into_iter() {
             match dev.info.class {
@@ -139,15 +138,15 @@ impl PCIController {
                         _ => {}
                     }
                 },
-                PCIDeviceClass::SerialBusController(serialbus) => {
-                    match serialbus {
-                        PCISerialBusController::USBController(usb_ctlr) => {
-                            debug!("USB on {} ", dev.bus_location_str());
-                            G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
-                        },
-                        _ => {}
-                    }
-                },
+                // PCIDeviceClass::SerialBusController(serialbus) => {
+                //     match serialbus {
+                //         PCISerialBusController::USBController(usb_ctlr) => {
+                //             debug!("USB on {} ", dev.bus_location_str());
+                //             G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
+                //         },
+                //         _ => {}
+                //     }
+                // },
                 _ => {}
             }
         }

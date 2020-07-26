@@ -138,15 +138,15 @@ impl PCIController {
                         _ => {}
                     }
                 },
-                PCIDeviceClass::SerialBusController(serialbus) => {
-                    match serialbus {
-                        PCISerialBusController::USBController(usb_ctlr) => {
-                            debug!("USB on {} ", dev.bus_location_str());
-                            G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
-                        },
-                        _ => {}
-                    }
-                },
+                // PCIDeviceClass::SerialBusController(serialbus) => {
+                //     match serialbus {
+                //         PCISerialBusController::USBController(usb_ctlr) => {
+                //             debug!("USB on {} ", dev.bus_location_str());
+                //             G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
+                //         },
+                //         _ => {}
+                //     }
+                // },
                 _ => {}
             }
         }

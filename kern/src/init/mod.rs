@@ -3,6 +3,7 @@ use crate::vga_buffer::CONSOLE;
 use core::fmt::Write;
 
 pub mod oom;
+pub mod init;
 pub mod smp;
 
 #[panic_handler]

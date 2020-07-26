@@ -199,11 +199,19 @@ pub enum IPIDeliveryMode {
     StartUp = 0b110
 }
 
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub enum IPIDestinationShorthand {
+    NoShorthand = 0,
+    SelfOnly = 1,
+    AllIncludingSelf = 2,
+    AllExcludingSelf = 3,
+}
+
 /// Send IPI
-pub fn send_ipi(lapic_id: u8, vector: u8, mode: IPIDeliveryMode) {
+pub fn send_ipi(lapic_id: u8, vector: u8, mode: IPIDeliveryMode, shorthand: IPIDestinationShorthand) {
     // TODO Use constants
     unsafe {
-        let mut value = (vector as u32) | (mode as u32) << 8;
+        let mut value = (vector as u32) | (mode as u32) << 8 | (shorthand as u32) << 18;
         if mode != IPIDeliveryMode::INIT {
             value |= 1 << 14;
         }

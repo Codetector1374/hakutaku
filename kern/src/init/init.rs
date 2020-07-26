@@ -224,8 +224,6 @@ pub fn ap_initialization() {
     let acpi_handle = ACPI.read();
     let acpi = acpi_handle.as_ref().expect("no table >>_<<");
 
-    crate::hardware::apic::send_ipi(0, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::AllExcludingSelf);
-    sleep(Duration::from_millis(20)).expect("");
 
     for x in &acpi.application_processors {
         CORE_BOOT_FLAG.store(true, Ordering::Release);
@@ -242,6 +240,8 @@ pub fn ap_initialization() {
         };
         *ap_stack_top = sp;
         let apic_id = x.local_apic_id;
+        crate::hardware::apic::send_ipi(apic_id, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::NoShorthand);
+        sleep(Duration::from_millis(20)).expect("");
         crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
         while CORE_BOOT_FLAG.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(1)).expect("");

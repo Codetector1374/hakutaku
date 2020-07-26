@@ -71,7 +71,7 @@ impl APIC {
                 PAGE_TABLE.write().map_to(
                     Page::<Size4KiB>::from_start_address(va).expect("valid page bound"),
                     PhysFrame::from_start_address(apic_base).expect("pa alignment"),
-                    PageTableFlags::PRESENT | PageTableFlags::WRITE_THROUGH | PageTableFlags::WRITABLE,
+                    PageTableFlags::PRESENT | PageTableFlags::NO_CACHE | PageTableFlags::WRITABLE,
                     &mut alloc_wrapper,
                 ).expect("Unable to map APIC").flush()
             })
@@ -212,11 +212,11 @@ pub fn send_ipi(lapic_id: u8, vector: u8, mode: IPIDeliveryMode, shorthand: IPID
     // TODO Use constants
     unsafe {
         let mut value = (vector as u32) | (mode as u32) << 8 | (shorthand as u32) << 18;
-        if mode != IPIDeliveryMode::INIT {
-            value |= 1 << 14;
-        }
+        value |= 1 << 14;
         while (*LAPIC_ICR_LOW).read() & (1 << 12) == 1 {}
-        (*LAPIC_ICR_HIGH).write((lapic_id as u32) << 24);
+        if lapic_id != 0xFF {
+            (*LAPIC_ICR_HIGH).write((lapic_id as u32) << 24);
+        }
         (*LAPIC_ICR_LOW).write(value);
         while (*LAPIC_ICR_LOW).read() & (1 << 12) == 1 {}
     }

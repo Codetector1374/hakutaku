@@ -68,7 +68,7 @@ use crate::shell::Shell;
 use core::ops::Add;
 use crate::init::smp::CORE_BOOT_FLAG;
 use core::sync::atomic::Ordering;
-use crate::init::init::{kern_init, ap_initialization};
+use crate::init::init::{kern_init, mp_initialization};
 use crate::vga_buffer::disable_cursor;
 
 #[macro_use]
@@ -138,13 +138,15 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 }
 
 pub extern fn kernel_initialization_process() {
+    // MP initialization
+    mp_initialization();
+
     // PCI
     GLOBAL_PCI.lock().initialize_bus_with_devices();
     //
-    // // Usb Proc
+    // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);
     // SCHEDULER.add(usbproc);
-    ap_initialization();
 
     let mut shell = Shell::new();
     loop {

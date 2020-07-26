@@ -32,8 +32,7 @@ impl AHCI {
         let loc_str = dev.bus_location_str();
         for ctlr in self.controllers.read().iter() {
             if ctlr.dev == dev {
-                warn!("[AHCI] Attempt to reinitialize a controller at {}", loc_str);
-                return;
+                panic!("[AHCI] Attempt to reinitialize a controller at {}", loc_str);
             }
         }
         let ctrler = AHCIController::create_from_device(dev);

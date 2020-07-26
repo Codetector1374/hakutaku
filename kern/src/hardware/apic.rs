@@ -10,6 +10,7 @@ use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::spin_wait;
 use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
+use crate::memory::paging::PHYSMAP_BASE;
 
 pub mod timer;
 
@@ -185,3 +186,30 @@ impl APIC {
     }
 }
 
+const LAPIC_ICR_LOW: *mut Volatile<u32> = (0xFEE0_0300 + PHYSMAP_BASE) as *mut Volatile<u32>;
+const LAPIC_ICR_HIGH: *mut Volatile<u32> = (0xFEE0_0310 + PHYSMAP_BASE) as *mut Volatile<u32>;
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub enum IPIDeliveryMode {
+    Fixed = 0,
+    LowestPriority = 1,
+    SMI = 0b010,
+    NMI = 0b100,
+    INIT = 0b101,
+    StartUp = 0b110
+}
+
+/// Send IPI
+pub fn send_ipi(lapic_id: u8, vector: u8, mode: IPIDeliveryMode) {
+    // TODO Use constants
+    unsafe {
+        let mut value = (vector as u32) | (mode as u32) << 8;
+        if mode != IPIDeliveryMode::INIT {
+            value |= 1 << 14;
+        }
+        while (*LAPIC_ICR_LOW).read() & (1 << 12) == 1 {}
+        (*LAPIC_ICR_HIGH).write((lapic_id as u32) << 24);
+        (*LAPIC_ICR_LOW).write(value);
+        while (*LAPIC_ICR_LOW).read() & (1 << 12) == 1 {}
+    }
+}

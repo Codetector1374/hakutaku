@@ -53,7 +53,7 @@ use crate::arch::x86_64::KernACPIHandler;
 use crate::device::ahci::G_AHCI;
 use crate::device::pci::GLOBAL_PCI;
 use crate::device::usb::G_USB;
-use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC};
+use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode};
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
 use crate::interrupts::{InterruptIndex, PICS};
@@ -65,6 +65,9 @@ use crate::memory::paging::KERNEL_PDPS;
 use crate::process::process::Process;
 use crate::process::scheduler::GlobalScheduler;
 use crate::shell::Shell;
+use core::ops::Add;
+use crate::init::smp::CORE_BOOT_FLAG;
+use core::sync::atomic::Ordering;
 
 #[macro_use]
 pub mod vga_buffer;
@@ -102,6 +105,7 @@ pub static ACPI: RwLock<Option<Acpi>> = RwLock::new(None);
 extern "C" {
     static mut __kernel_start: u64;
     static mut __kernel_end: u64;
+    static mut __ap_stack_top: u64;
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -332,6 +336,34 @@ pub extern fn kernel_initialization_process() {
     // // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);
     // SCHEDULER.add(usbproc);
+
+    {
+        let acpi_handle = ACPI.read();
+        let acpi = acpi_handle.as_ref().expect("no table >>_<<");
+        for x in &acpi.application_processors {
+            CORE_BOOT_FLAG.store(true, Ordering::Release);
+            let frame = {
+                let mut falloc = LOW_FALLOC.lock();
+                for _ in 0..3 {
+                    falloc.allocate_frame().expect("");
+                }
+                falloc.allocate_frame().expect("")
+            };
+            let sp = frame.start_address().as_u64() + 4096 + KERNEL_TEXT_BASE;
+            let ap_stack_top: &mut u64 = unsafe {
+                &mut *VirtAddr::from_ptr(&__ap_stack_top as *const u64).add(PHYSMAP_BASE).as_mut_ptr()
+            };
+            *ap_stack_top = sp;
+            let apic_id = x.local_apic_id;
+            crate::hardware::apic::send_ipi(apic_id, 0, IPIDeliveryMode::INIT);
+            sleep(Duration::from_millis(20)).expect("");
+            crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp);
+            while CORE_BOOT_FLAG.load(Ordering::Relaxed) {
+                sleep(Duration::from_millis(1)).expect("");
+            }
+            println!("Core {} Boot ACK", apic_id);
+        }
+    }
 
     let mut shell = Shell::new();
     loop {

@@ -3,12 +3,11 @@ use crate::vga_buffer::CONSOLE;
 use core::fmt::Write;
 
 pub mod oom;
+pub mod smp;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("
----------- PANIC ----------
-    ");
+    println!("\n---------- PANIC ----------");
     match info.location() {
         Some(loc) => {
             println!("File: {}\nLine: {}\nCol: {}", loc.file(), loc.line(), loc.column());

@@ -26,8 +26,8 @@ optramimage2: file=none
 optramimage3: file=none
 optramimage4: file=none
 pci: enabled=1, chipset=i440fx
-vga: extension=vbe, update_freq=10, realtime=1
-cpu: count=1, ips=4000000, model=bx_generic, reset_on_triple_fault=0, cpuid_limit_winnt=0, ignore_bad_msrs=1, mwait_is_nop=0
+vga: extension=vbe, update_freq=10, realtime=1, ddc=builtin
+cpu: count=1:1:2, ips=4000000, quantum=16, model=bx_generic, reset_on_triple_fault=0, cpuid_limit_winnt=0, ignore_bad_msrs=1, mwait_is_nop=0
 cpuid: level=6, stepping=3, model=3, family=6, vendor_string="GenuineBochs", brand_string="              Intel(R) Pentium(R) 4 CPU        "
 cpuid: mmx=true, apic=xapic, simd=sse2, sse4a=false, misaligned_sse=false, sep=true
 cpuid: movbe=false, adx=false, aes=false, sha=false, xsave=false, xsaveopt=false, x86_64=true
@@ -54,4 +54,4 @@ com1: enabled=true, mode=null
 com2: enabled=false
 com3: enabled=false
 com4: enabled=false
-usb_xhci: enabled=1, port1="disk:ext/demo_usb.img"
+usb_xhci: enabled=1, port1="disk:ext/demo_usb.img", options1=none, port2=none, options2=none, port3=none, options3=none, port4=none, options4=none

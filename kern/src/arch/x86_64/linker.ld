@@ -1,6 +1,14 @@
 ENTRY(_start)
 
 SECTIONS {
+    . = 0x8000;
+
+    __smp_start = .;
+    .smp : {
+        KEEP(*(.smp .smp.*))
+    }
+    __smp_end = .;
+
     . = 1M;
 
     .boot :

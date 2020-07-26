@@ -126,6 +126,9 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
     println!("Kernel Core Ready");
 
+    unsafe {
+        SCHEDULER.initialize();
+    }
     // Load the first process
     let mut main_proc = Process::new();
     main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();

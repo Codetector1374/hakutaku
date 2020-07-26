@@ -14,7 +14,7 @@ use crate::hardware::apic::GLOBAL_APIC;
 use crate::{SCHEDULER, kernel_initialization_process};
 use crate::process::state::State::Running;
 use crate::process::cpu::Processors;
-use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::instructions::interrupts::{without_interrupts, enable_interrupts_and_hlt};
 
 /// Process scheduler for the entire machine.
 #[derive(Debug)]
@@ -89,7 +89,7 @@ impl GlobalScheduler {
         SCHEDULER.switch_to(&mut trap);
         let tf = &mut trap as *mut TrapFrame;
         unsafe {
-            asm!("mov rsp, {0}", in(reg)tf);
+            asm!("mov rsp, {0}", in(reg) tf);
             restore_context_wrapper();
         }
     }
@@ -104,7 +104,7 @@ impl GlobalScheduler {
 #[no_mangle]
 pub extern fn idle_process() {
     loop {
-        unsafe { asm!("hlt") };
+        x86_64::instructions::interrupts::enable_interrupts_and_hlt();
     }
 }
 
@@ -213,6 +213,8 @@ impl Scheduler {
     fn idle(&mut self, tf: &mut TrapFrame) {
         let mut idle = TrapFrame::default();
         idle.rip = idle_process as u64;
+        // TODO: rethink about what stack idle process should use?
+        idle.rsp = x86_64::registers::read_rsp();
         *tf = idle;
     }
 

@@ -214,10 +214,6 @@ pub fn kern_init(boot_info: BootInformation) {
             error!("[ACPI] Failed to located ACPI: {:?}", e);
         }
     }
-
-    unsafe {
-        SCHEDULER.initialize();
-    }
 }
 
 pub fn ap_initialization() {
@@ -227,13 +223,7 @@ pub fn ap_initialization() {
 
     for x in &acpi.application_processors {
         CORE_BOOT_FLAG.store(true, Ordering::Release);
-        let frame = {
-            let mut falloc = LOW_FALLOC.lock();
-            for _ in 0..3 {
-                falloc.allocate_frame().expect("");
-            }
-            falloc.allocate_frame().expect("")
-        };
+        let frame = LOW_FALLOC.lock().allocate_frame().expect("");
         let sp = frame.start_address().as_u64() + 4096 + KERNEL_TEXT_BASE;
         let ap_stack_top: &mut u64 = unsafe {
             &mut *VirtAddr::from_ptr(&__ap_stack_top as *const u64).add(PHYSMAP_BASE).as_mut_ptr()

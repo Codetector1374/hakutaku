@@ -58,7 +58,7 @@ impl Default for TrapFrame {
             rip: 0,
             cs: 8,
             rflags: RFlags::INTERRUPT_FLAG,
-            rsp: x86_64::registers::read_rsp(),
+            rsp: 0,
             ss: 0
         }
     }

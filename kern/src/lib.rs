@@ -69,6 +69,7 @@ use core::ops::Add;
 use crate::init::smp::CORE_BOOT_FLAG;
 use core::sync::atomic::Ordering;
 use crate::init::init::{kern_init, ap_initialization};
+use crate::vga_buffer::disable_cursor;
 
 #[macro_use]
 pub mod vga_buffer;
@@ -109,6 +110,7 @@ pub static ACPI: RwLock<Option<Acpi>> = RwLock::new(None);
 #[no_mangle]
 #[naked]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
+    disable_cursor();
     println!("Multiboot at {:#x}", multiboot_ptr);
     unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr + KERNEL_TEXT_BASE as usize) };

@@ -146,6 +146,21 @@ pub fn print(args: fmt::Arguments) {
     });
 }
 
+pub fn disable_cursor() {
+    unsafe {
+        asm!(
+        "mov dx, 0x3D4",
+    	"mov al, 0xA",
+	    "out dx, al",
+	    "inc dx",
+	    "mov al, 0x20",
+	    "out dx, al",
+
+	    lateout("rax") _,
+	    lateout("rdx") _);
+    }
+}
+
 macro_rules! println {
     ($fmt:expr) => (print!(concat!($fmt, "\n")));
     ($fmt:expr, $($arg:tt)*) => (print!(concat!($fmt, "\n"), $($arg)*));

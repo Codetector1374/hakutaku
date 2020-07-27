@@ -195,16 +195,18 @@ impl Scheduler {
     /// If there is no process to switch to, returns `None`. Otherwise, returns
     /// `Some` of the next process`s process ID.
     fn switch_to(&mut self, tf: &mut TrapFrame) -> Option<Id> {
-        for i in 0..self.processes.len() {
-            let ready = self.processes[i].ready();
-            if ready {
-                let mut proc = self.processes.remove(i).expect("something");
-                proc.state = Running;
-                let pid = proc.pid;
-                self.cpus.current_cpu().current_pid = Some(pid);
-                *tf = *proc.context;
-                self.processes.push_front(proc);
-                return Some(pid);
+        if self.cpus.current_cpu().apic_id == 0 {
+            for i in 0..self.processes.len() {
+                let ready = self.processes[i].ready();
+                if ready {
+                    let mut proc = self.processes.remove(i).expect("something");
+                    proc.state = Running;
+                    let pid = proc.pid;
+                    self.cpus.current_cpu().current_pid = Some(pid);
+                    *tf = *proc.context;
+                    self.processes.push_front(proc);
+                    return Some(pid);
+                }
             }
         }
         None

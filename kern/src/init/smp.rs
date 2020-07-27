@@ -25,13 +25,12 @@ pub fn ap_entry() -> ! {
     unsafe { GLOBAL_RESMAN.read().get_gdt(GLOBAL_APIC.read().apic_id()).load() };
 
     // Clear the pending flag so next core can boot while we setup ourselves.
-    CORE_BOOT_FLAG.store(false, Ordering::Relaxed);
+    CORE_BOOT_FLAG.store(false, Ordering::Release);
     println!("Core with LAPIC: {} is ready", GLOBAL_APIC.read().apic_id());
 
-    // SCHEDULER.start();
-    loop {
-        hlt();
-    }
+    SCHEDULER.start();
+
+    panic!("DIE");
 }
 
 pub extern fn thing() -> ! {

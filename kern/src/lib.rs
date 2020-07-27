@@ -68,7 +68,7 @@ use crate::shell::Shell;
 use core::ops::Add;
 use crate::init::smp::CORE_BOOT_FLAG;
 use core::sync::atomic::Ordering;
-use crate::init::init::{kern_init, mp_initialization};
+use crate::init::init::{boostrap_core_init, mp_initialization};
 use crate::vga_buffer::disable_cursor;
 
 #[macro_use]
@@ -81,7 +81,6 @@ pub mod init;
 pub mod hardware;
 pub mod device;
 pub mod interrupts;
-pub mod gdt;
 pub mod memory;
 pub mod shell;
 pub mod logger;
@@ -111,11 +110,11 @@ pub static ACPI: RwLock<Option<Acpi>> = RwLock::new(None);
 #[naked]
 pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     disable_cursor();
-    println!("Multiboot at {:#x}", multiboot_ptr);
+    debug!("Multiboot at {:#x}", multiboot_ptr);
     unsafe { crate::logger::init_logger() };
     let boot_info = unsafe { multiboot2::load(multiboot_ptr + KERNEL_TEXT_BASE as usize) };
 
-    kern_init(boot_info);
+    boostrap_core_init(boot_info);
 
     // Must initialize after allocator
     hardware::keyboard::initialize();
@@ -124,7 +123,7 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     let str = String::from_utf8_lossy(&mfg_string).into_owned();
     println!("I'm running on {}", &str);
 
-    println!("Kernel Core Ready");
+    println!("Bootstrap Core Ready");
 
     unsafe {
         SCHEDULER.initialize();
@@ -142,7 +141,7 @@ pub extern fn kernel_initialization_process() {
     mp_initialization();
 
     // PCI
-    GLOBAL_PCI.lock().initialize_bus_with_devices();
+    // GLOBAL_PCI.lock().initialize_bus_with_devices();
     //
     // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);
@@ -151,6 +150,9 @@ pub extern fn kernel_initialization_process() {
     let mut shell = Shell::new();
     loop {
         shell.shell("1> ");
+    }
+    loop {
+        hlt();
     }
 }
 

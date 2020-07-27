@@ -1,5 +1,5 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode, HandlerFunc};
-use crate::gdt::DOUBLE_FAULT_IST_INDEX;
+use crate::arch::x86_64::descriptor_table::DOUBLE_FAULT_IST_INDEX;
 use lazy_static::lazy_static;
 use crate::hardware::pic::ChainedPics;
 use spin::MutexGuard;

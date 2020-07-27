@@ -7,6 +7,8 @@ use core::ops::Add;
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use crate::memory::paging::PHYSMAP_BASE;
 
+pub mod descriptor_table;
+
 pub struct KernACPIHandler;
 
 impl AcpiHandler for KernACPIHandler {

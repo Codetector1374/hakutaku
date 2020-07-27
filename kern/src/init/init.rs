@@ -1,26 +1,31 @@
-use multiboot2::BootInformation;
-use crate::{gdt, interrupts, LOW_FALLOC, FRAME_ALLOC, ALLOCATOR, SCHEDULER, ACPI};
-use crate::interrupts::PICS;
-use crate::memory::frame_allocator::MemorySegment;
-use crate::memory::align_down;
-use x86_64::instructions::interrupts::without_interrupts;
-use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags, PhysFrame};
-use x86_64::{PhysAddr, VirtAddr};
-use crate::memory::paging::{KERNEL_TEXT_BASE, KERNEL_PML4_TABLE, PHYSMAP_BASE, KERNEL_HEAP_BASE, KERNEL_HEAP_TOP};
-use x86_64::registers::control::Cr3;
 use alloc::boxed::Box;
 use core::cmp::min;
-use crate::hardware::apic::{GLOBAL_APIC, APICDeliveryMode, IPIDeliveryMode, IPIDestinationShorthand};
-use crate::hardware::apic::timer::APICTimerMode;
-use core::time::Duration;
-use crate::hardware::pit::GLOBAL_PIT;
-use x86_64::registers::control::Cr3Flags;
-use crate::KERNEL_PDPS;
-use crate::arch::x86_64::KernACPIHandler;
-use crate::init::smp::CORE_BOOT_FLAG;
-use core::sync::atomic::Ordering;
 use core::ops::Add;
+use core::sync::atomic::Ordering;
+use core::time::Duration;
+
+use multiboot2::BootInformation;
+
 use kernel_api::syscall::sleep;
+use x86_64::{PhysAddr, VirtAddr};
+use x86_64::instructions::interrupts::without_interrupts;
+use x86_64::registers::control::Cr3;
+use x86_64::registers::control::Cr3Flags;
+use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags, PhysFrame};
+
+use crate::{ACPI, ALLOCATOR, FRAME_ALLOC, interrupts, LOW_FALLOC, SCHEDULER};
+use crate::arch::x86_64::descriptor_table;
+use crate::arch::x86_64::KernACPIHandler;
+use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, IPIDestinationShorthand};
+use crate::hardware::apic::timer::APICTimerMode;
+use crate::hardware::pit::GLOBAL_PIT;
+use crate::init::smp::CORE_BOOT_FLAG;
+use crate::interrupts::PICS;
+use crate::KERNEL_PDPS;
+use crate::memory::align_down;
+use crate::memory::frame_allocator::MemorySegment;
+use crate::memory::paging::{KERNEL_HEAP_BASE, KERNEL_HEAP_TOP, KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE};
+use crate::hardware::resman::GLOBAL_RESMAN;
 
 extern "C" {
     static mut __kernel_start: u64;
@@ -28,12 +33,7 @@ extern "C" {
     static mut __ap_stack_top: u64;
 }
 
-pub fn kern_init(boot_info: BootInformation) {
-    gdt::init();
-    interrupts::init_idt();
-    unsafe {
-        PICS.lock().initialize();
-    };
+pub fn boostrap_core_init(boot_info: BootInformation) {
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
     let kernel_start = unsafe { &__kernel_start as *const u64 as u64 };
@@ -126,7 +126,6 @@ pub fn kern_init(boot_info: BootInformation) {
             assert!(!pml4[va.p4_index()].is_unused(), "PML4 table has unmapped entry in kaddr");
             assert!(u16::from(va.p4_index()) >= 256u16, "VA in incorrect range");
             if kpdps[usize::from(va.p4_index()) - 256][va.p3_index()].is_unused() {
-                debug!("[PhysMap] Mapping in [{}]kPDPs[{}]", usize::from(va.p4_index()), usize::from(va.p3_index()));
                 if saved_frame.is_none() {
                     saved_frame = Some(FRAME_ALLOC.lock().allocate_frame().expect(""));
                 }
@@ -154,7 +153,7 @@ pub fn kern_init(boot_info: BootInformation) {
                 .set_addr(PhysAddr::new(pa),
                           PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE);
         }
-        debug!("[INIT] {} low_falloc pages used for PhysMap", backup_frame_cnt);
+        trace!("[INIT] {} low_falloc pages used for PhysMap", backup_frame_cnt);
     }
 
     // Unmap the borrowed table
@@ -169,23 +168,32 @@ pub fn kern_init(boot_info: BootInformation) {
         ALLOCATOR.initialize
         (
             KERNEL_HEAP_BASE as usize,
-            min(KERNEL_HEAP_TOP, KERNEL_HEAP_BASE.saturating_add(total_mem as u64)) as usize
+            min(KERNEL_HEAP_TOP, KERNEL_HEAP_BASE.saturating_add(total_mem as u64)) as usize,
         );
     }
     debug!("[kALLOC] Kernel Allocator Initialized");
 
+    // Initialize APIC
+    trace!("initializing APIC");
+    GLOBAL_APIC.write().initialize();
+    trace!("initialized APIC");
+    GLOBAL_APIC.write().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
+    GLOBAL_APIC.write().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
+    GLOBAL_APIC.write().set_apic_spurious_lvt(0xFF, true);
+    GLOBAL_APIC.write().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
+
+    // Setup TSS / GDT / IDT
+    GLOBAL_RESMAN.write().initialize();
+
+    unsafe { GLOBAL_RESMAN.read().get_gdt(GLOBAL_APIC.read().apic_id()).load(); }
+    interrupts::init_idt();
+
+    unsafe {
+        PICS.lock().initialize();
+    };
 
     // ENABLE Interrupt at the END
     x86_64::instructions::interrupts::enable();
-
-    // Initialize APIC
-    trace!("initializing APIC");
-    GLOBAL_APIC.lock().initialize();
-    trace!("initialized APIC");
-    GLOBAL_APIC.lock().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
-    GLOBAL_APIC.lock().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
-    GLOBAL_APIC.lock().set_apic_spurious_lvt(0xFF, true);
-    GLOBAL_APIC.lock().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
 
     // Start Clock
     trace!("starting clock");
@@ -193,12 +201,10 @@ pub fn kern_init(boot_info: BootInformation) {
 
     let (rsdtaddr, version) = match boot_info.rsdp_v2_tag() {
         Some(flag) => {
-            debug!("[ACPI] Multiboot XSDT: {:?}", flag);
             (flag.xsdt_address(), flag.revision())
-        },
+        }
         _ => {
             let lol = boot_info.rsdp_v1_tag().expect("gotta have RSDP right?");
-            debug!("[ACPI] Multiboot RSDT {:?}", lol);
             (lol.rsdt_address(), lol.revision())
         }
     };
@@ -220,9 +226,6 @@ pub fn mp_initialization() {
     let acpi_handle = ACPI.read();
     let acpi = acpi_handle.as_ref().expect("no table >>_<<");
 
-    crate::hardware::apic::send_ipi(0xFF, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::AllExcludingSelf);
-    sleep(Duration::from_millis(20)).expect("");
-
     for x in &acpi.application_processors {
         CORE_BOOT_FLAG.store(true, Ordering::Release);
         let frame = LOW_FALLOC.lock().allocate_frame().expect("");
@@ -232,10 +235,21 @@ pub fn mp_initialization() {
         };
         *ap_stack_top = sp;
         let apic_id = x.local_apic_id;
+
+        // Register core with Resman
+        GLOBAL_RESMAN.write().register_core(apic_id);
+
+        crate::hardware::apic::send_ipi(apic_id, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::NoShorthand);
+        sleep(Duration::from_millis(10)).expect("");
         crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
+        sleep(Duration::from_millis(1)).unwrap();
+        if CORE_BOOT_FLAG.load(Ordering::Relaxed) {
+            crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
+        }
         while CORE_BOOT_FLAG.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(1)).expect("");
         }
         println!("Core {} Boot ACK", apic_id);
+        break;
     }
 }

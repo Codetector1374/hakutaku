@@ -83,7 +83,7 @@ impl GlobalScheduler {
     /// preemptive scheduling. This method should not return under normal
     /// conditions.
     pub fn start(&self) -> ! {
-        GLOBAL_APIC.lock().set_timer_interval(SCHEDULER_TICK).expect("unable to set timer");
+        GLOBAL_APIC.write().set_timer_interval(SCHEDULER_TICK).expect("unable to set timer");
 
         let mut trap = TrapFrame::default();
         SCHEDULER.switch_to(&mut trap);

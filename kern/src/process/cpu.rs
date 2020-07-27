@@ -60,7 +60,7 @@ impl LocalCPU {
 
 impl Processors {
     pub fn current_cpu(&mut self) -> &mut LocalCPU {
-        let cpuid = GLOBAL_APIC.lock().apic_id();
+        let cpuid = GLOBAL_APIC.read().apic_id();
         if !self.cpus.contains_key(&cpuid) {
             panic!("current cpu is not registered?");
         }

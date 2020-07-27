@@ -82,5 +82,5 @@ pub extern "C" fn handle_context_switch(tf: &mut TrapFrame, cause: InterruptSour
         },
         // _ => {}
     }
-    GLOBAL_APIC.lock().end_of_interrupt();
+    GLOBAL_APIC.read().end_of_interrupt();
 }

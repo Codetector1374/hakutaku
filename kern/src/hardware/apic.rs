@@ -5,7 +5,7 @@ use crate::memory::frame_allocator::FrameAllocWrapper;
 use x86_64::instructions::interrupts::without_interrupts;
 use crate::memory::mmio_bump_allocator::VMALLOC;
 use volatile::Volatile;
-use spin::Mutex;
+use spin::RwLock;
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
 use crate::hardware::pit::spin_wait;
 use core::time::Duration;
@@ -14,7 +14,7 @@ use crate::memory::paging::PHYSMAP_BASE;
 
 pub mod timer;
 
-pub static GLOBAL_APIC: Mutex<APIC> = Mutex::new(APIC::uninitialized());
+pub static GLOBAL_APIC: RwLock<APIC> = RwLock::new(APIC::uninitialized());
 
 #[repr(u8)]
 pub enum APICDeliveryMode {
@@ -113,7 +113,7 @@ impl APIC {
         word.read()
     }
 
-    pub fn end_of_interrupt(&mut self) {
+    pub fn end_of_interrupt(&self) {
         let eoi = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_EOI) as *mut Volatile<u32>) };
         eoi.write(0);
     }

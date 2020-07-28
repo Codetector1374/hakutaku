@@ -1,9 +1,5 @@
-use super::class::PCIDeviceClass::{Other, SerialBusController, MassStorageController, BridgeDevice};
-use super::class::PCISerialBusController::{FireWire, ACCESSBus, SSA, USBController, FibreChannel};
-use super::class::PCISerialBusUSB::{UHCI, OHCI, EHCI, XHCI, Device};
 use super::class::HeaderType::*;
 use cpuio::UnsafePort;
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum HeaderType {
@@ -41,29 +37,34 @@ impl From<u8> for HeaderType {
 #[derive(Debug, Clone, Copy)]
 pub enum PCIDeviceClass {
     Unclassified(u8, u8),
-    MassStorageController(PCIClassMassStorage),
+    MassStorageController(PCIClassMassStorageClass),
     NetworkController(u8, u8),
-    SerialBusController(PCISerialBusController),
-    BridgeDevice(PCIClassBridgeDevice),
+    SerialBusController(PCISerialBusControllerClass),
+    BridgeDevice(PCIBridgeDeviceClass),
+    SimpleCommunicationController(PCISimpleCommunicationControllerClass),
     Other(u8, u8, u8)
 }
 
 impl PCIDeviceClass {
     pub fn from(class_group: u32) -> PCIDeviceClass {
+        use self::PCIDeviceClass::*;
+
         let class = (class_group >> 16) as u8;
         let sub = (class_group >> 8) as u8;
         let progif = class_group as u8;
         match class {
-            0x01 => MassStorageController(PCIClassMassStorage::from(sub,progif)),
-            0x0C => SerialBusController(PCISerialBusController::from(sub, progif)),
-            0x6 => BridgeDevice(PCIClassBridgeDevice::from(sub, progif)),
+            0x01 => MassStorageController(PCIClassMassStorageClass::from(sub, progif)),
+            0x02 => NetworkController(sub, progif),
+            0x06 => BridgeDevice(PCIBridgeDeviceClass::from(sub, progif)),
+            0x07 => SimpleCommunicationController(PCISimpleCommunicationControllerClass::from(sub, progif)),
+            0x0C => SerialBusController(PCISerialBusControllerClass::from(sub, progif)),
             _ => Other(class, sub, progif)
         }
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum PCIClassBridgeDevice {
+pub enum PCIBridgeDeviceClass {
     HostBridge,
     ISABridge,
     PCItoPCIBridge(u8),
@@ -71,20 +72,21 @@ pub enum PCIClassBridgeDevice {
     Other(u8, u8)
 }
 
-impl PCIClassBridgeDevice {
-    pub fn from(sub: u8, progif: u8) -> PCIClassBridgeDevice {
+impl PCIBridgeDeviceClass {
+    pub fn from(sub: u8, progif: u8) -> Self {
+        use self::PCIBridgeDeviceClass::*;
         match sub {
-            0x0 => PCIClassBridgeDevice::HostBridge,
-            0x1 => PCIClassBridgeDevice::ISABridge,
-            0x4 => PCIClassBridgeDevice::PCItoPCIBridge(progif),
-            0x9 => PCIClassBridgeDevice::PCItoPCIHostBridge(progif),
-            _ => PCIClassBridgeDevice::Other(sub, progif),
+            0x0 => HostBridge,
+            0x1 => ISABridge,
+            0x4 => PCItoPCIBridge(progif),
+            0x9 => PCItoPCIHostBridge(progif),
+            _ => Other(sub, progif),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum PCIClassMassStorage {
+pub enum PCIClassMassStorageClass {
     /// Prog If
     IDEController(u8),
     FloppyDiskController,
@@ -113,11 +115,11 @@ impl PCIClassMassStroageSATA {
     }
 }
 
-impl PCIClassMassStorage {
-    pub fn from(sub: u8, prog_if: u8) -> PCIClassMassStorage {
+impl PCIClassMassStorageClass {
+    pub fn from(sub: u8, prog_if: u8) -> PCIClassMassStorageClass {
         match sub {
-            0x06 => PCIClassMassStorage::SATA(PCIClassMassStroageSATA::from(prog_if)),
-            _ => PCIClassMassStorage::Unknown(sub, prog_if),
+            0x06 => PCIClassMassStorageClass::SATA(PCIClassMassStroageSATA::from(prog_if)),
+            _ => PCIClassMassStorageClass::Unknown(sub, prog_if),
         }
     }
 }
@@ -145,7 +147,7 @@ pub enum PCIClassDisplayController {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum PCISerialBusController {
+pub enum PCISerialBusControllerClass {
     FireWire(u8),
     ACCESSBus,
     SSA,
@@ -158,15 +160,17 @@ pub enum PCISerialBusController {
     Other(u8, u8)
 }
 
-impl PCISerialBusController {
-    pub fn from(sub: u8, progif: u8) -> PCISerialBusController{
+impl PCISerialBusControllerClass {
+    pub fn from(sub: u8, progif: u8) -> PCISerialBusControllerClass {
+        use self::PCISerialBusControllerClass::*;
+
         match sub {
             0x0 => FireWire(progif),
             0x1 => ACCESSBus,
             0x2 => SSA,
             0x3 => USBController(progif.into()),
             0x4 => FibreChannel,
-            _ => PCISerialBusController::Other(sub, progif)
+            _ => PCISerialBusControllerClass::Other(sub, progif)
         }
     }
 }
@@ -183,6 +187,8 @@ pub enum PCISerialBusUSB {
 
 impl From<u8> for PCISerialBusUSB {
     fn from(progif: u8) -> Self {
+        use self::PCISerialBusUSB::*;
+
         match progif {
             0x0 => UHCI,
             0x10 => OHCI,
@@ -190,6 +196,34 @@ impl From<u8> for PCISerialBusUSB {
             0x30 => XHCI,
             0xFE => Device,
             _ => PCISerialBusUSB::Other(progif)
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum PCISimpleCommunicationControllerClass {
+    SerialController(u8),
+    ParallelController(u8),
+    MultiPortSerial,
+    Modem(u8),
+    GPIB,
+    SmartCard,
+    Other(u8),
+    Unknown(u8, u8)
+}
+
+impl PCISimpleCommunicationControllerClass {
+    pub fn from(sub: u8, progif: u8) -> Self {
+        use self::PCISimpleCommunicationControllerClass::*;
+        match sub {
+            0x0 => SerialController(progif),
+            0x1 => ParallelController(progif),
+            0x2 => MultiPortSerial,
+            0x3 => Modem(progif),
+            0x4 => GPIB,
+            0x5 => SmartCard,
+            0x80 => Other(progif),
+            _ => Unknown(sub, progif)
         }
     }
 }

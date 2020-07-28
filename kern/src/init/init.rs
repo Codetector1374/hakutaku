@@ -250,7 +250,5 @@ pub fn mp_initialization() {
         while CORE_BOOT_FLAG.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(1)).expect("");
         }
-        println!("Core {} Boot ACK", apic_id);
-        // break;
     }
 }

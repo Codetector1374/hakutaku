@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use crate::process::state::State::*;
-use crate::process::state::{EventPollFn, State};
+use crate::process::state::{EventPollFn, State, ProcessSummaryState};
 use crate::interrupts::context_switch::TrapFrame;
 use crate::process::stack::Stack;
 
@@ -85,5 +85,19 @@ impl Process {
         };
         self.state = state;
         return is_ready;
+    }
+}
+
+pub struct ProcessSummary {
+    pub pid: Id,
+    pub state: ProcessSummaryState
+}
+
+impl From<&Process> for ProcessSummary {
+    fn from(p: &Process) -> Self {
+        Self {
+            pid: p.pid,
+            state: ProcessSummaryState::from(&p.state),
+        }
     }
 }

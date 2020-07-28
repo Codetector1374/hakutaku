@@ -22,7 +22,7 @@ use x86_64::structures::paging::{Mapper, MapperAllSizes, Page, PageTableFlags, P
 
 use crate::{PAGE_TABLE, SCHEDULER};
 use crate::device::ahci::structures::CommandTable;
-use crate::device::pci::class::{PCIDeviceClass, PCISerialBusController, PCISerialBusUSB};
+use crate::device::pci::class::{PCIDeviceClass, PCISerialBusControllerClass, PCISerialBusUSB};
 use crate::device::pci::device::PCIDevice;
 use crate::device::pci::PCIController;
 use crate::device::usb::descriptor::{USBConfigurationDescriptor, USBDeviceDescriptor, USBEndpointDescriptor, USBInterfaceDescriptor};
@@ -180,7 +180,7 @@ pub enum XHCIError {
 
 impl XHCI {
     pub fn create_from_device(id: u64, mut dev: PCIDevice) -> Option<XHCI> {
-        if let PCIDeviceClass::SerialBusController(PCISerialBusController::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
+        if let PCIDeviceClass::SerialBusController(PCISerialBusControllerClass::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
             // Step1: Enable Bus Master
             let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
             tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;

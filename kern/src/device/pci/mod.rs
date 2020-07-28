@@ -126,7 +126,7 @@ impl PCIController {
             match dev.info.class {
                 PCIDeviceClass::MassStorageController(mass_storage) => {
                     match mass_storage {
-                        PCIClassMassStorage::SATA(sata) => {
+                        PCIClassMassStorageClass::SATA(sata) => {
                             match sata {
                                 PCIClassMassStroageSATA::AHCI => {
                                     debug!("AHCI on {} ", dev.bus_location_str());

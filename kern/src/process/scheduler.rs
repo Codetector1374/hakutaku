@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::mem;
 use core::time::Duration;
-use crate::process::process::{Process, Id};
+use crate::process::process::{Process, Id, ProcessSummary};
 use crate::process::state::State;
 use crate::interrupts::context_switch::{TrapFrame, restore_context_wrapper};
 use spin::Mutex;
@@ -74,8 +74,21 @@ impl GlobalScheduler {
             Some(_) => {
                 self.switch_to(tf)
             },
-            _ => 0
+            _ => {
+                debug!("Failed to context switch on core {}", GLOBAL_APIC.read().apic_id());
+                0
+            }
         }
+    }
+
+    pub fn summary(&self) -> Vec<ProcessSummary> {
+        let mut vec = Vec::new();
+        self.critical(|s| {
+            for process in s.processes.iter() {
+                vec.push(ProcessSummary::from(process));
+            }
+        });
+        vec
     }
 
     /// Loops until it finds the next process to schedule.

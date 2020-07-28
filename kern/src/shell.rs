@@ -12,6 +12,7 @@ use crate::device::usb::G_USB;
 use x86_64::instructions::interrupts::without_interrupts;
 use crate::device::ahci::G_AHCI;
 use crate::hardware::apic::GLOBAL_APIC;
+use crate::device::pci::class::PCIDeviceClass;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -207,13 +208,11 @@ impl Shell {
                 Ok(0)
             },
             "ps" => {
-                SCHEDULER.critical(|s| {
-                    println!("{:#?}", s.cpus);
-                    println!("========");
-                    for proc in s.processes.iter() {
-                        println!("Process: {}, {:?}", proc.pid, proc.state);
-                    }
-                });
+                println!("  PID  |   STATE  ");
+                println!("================================================================================");
+                for p in SCHEDULER.summary() {
+                    println!("  {:03}  | {}", p.pid, p.state)
+                }
                 Ok(0)
             }
             "lspci" => {
@@ -227,7 +226,13 @@ impl Shell {
                     GLOBAL_PCI.lock().enumerate_pci_bus()
                 });
                 for dev in &devs {
-                    println!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                    match dev.info.class {
+                        PCIDeviceClass::Other(_c,_s,_i) => {},
+                        PCIDeviceClass::BridgeDevice(_) => {},
+                        _ => {
+                            println!("PCI: {:04x}:{:02x}:{:02x}=> {:?}", dev.bus, dev.device_number, dev.func, dev.info.class);
+                        }
+                    }
                 }
                 Ok(0)
             }

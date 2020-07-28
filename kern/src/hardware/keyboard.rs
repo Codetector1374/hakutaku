@@ -64,6 +64,5 @@ pub fn blocking_get_char() -> u8 {
             }
             None => {}
         }
-        x86_64::instructions::hlt();
     }
 }

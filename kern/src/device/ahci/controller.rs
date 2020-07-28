@@ -20,7 +20,7 @@ use pc_keyboard::KeyCode::Mute;
 use core::ops::{Deref, DerefMut};
 use core::borrow::BorrowMut;
 use crate::device::pci::device::PCIDevice;
-use crate::device::pci::class::{PCIClassMassStorage, PCIClassMassStroageSATA, PCIDeviceClass};
+use crate::device::pci::class::{PCIClassMassStorageClass, PCIClassMassStroageSATA, PCIDeviceClass};
 
 const AHCI_MEMORY_REGION_SIZE: usize = 0x1100;
 
@@ -194,7 +194,7 @@ impl From<u32> for AHCIHBAPortDevice {
 
 impl AHCIController {
     pub fn create_from_device(dev: PCIDevice) -> Option<AHCIController> {
-        if let PCIDeviceClass::MassStorageController(PCIClassMassStorage::SATA(PCIClassMassStroageSATA::AHCI)) = dev.info.class {
+        if let PCIDeviceClass::MassStorageController(PCIClassMassStorageClass::SATA(PCIClassMassStroageSATA::AHCI)) = dev.info.class {
             let mut controller = AHCIController {
                 dev,
                 physical_base_addr: PhysAddr::new(0),

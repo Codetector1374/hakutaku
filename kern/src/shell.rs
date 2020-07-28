@@ -208,14 +208,11 @@ impl Shell {
             },
             "ps" => {
                 SCHEDULER.critical(|s| {
-                    for _ in 0..1000000 {
-                        GLOBAL_APIC.read().apic_id();
+                    println!("{:#?}", s.cpus);
+                    println!("========");
+                    for proc in s.processes.iter() {
+                        println!("Process: {}, {:?}", proc.pid, proc.state);
                     }
-                    // println!("{:#?}", s.cpus);
-                    // println!("========");
-                    // for proc in s.processes.iter() {
-                    //     println!("Process: {}, {:?}", proc.pid, proc.state);
-                    // }
                 });
                 Ok(0)
             }

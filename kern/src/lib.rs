@@ -55,7 +55,7 @@ use crate::device::pci::GLOBAL_PCI;
 use crate::device::usb::G_USB;
 use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode};
 use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
-use crate::hardware::pit::{GLOBAL_PIT, spin_wait};
+use crate::hardware::pit::{GLOBAL_PIT, spin_wait, PIT};
 use crate::interrupts::{InterruptIndex, PICS};
 use crate::memory::{align_down, align_up};
 use crate::memory::allocator::Allocator;
@@ -146,6 +146,10 @@ pub extern fn kernel_initialization_process() {
     // Usb Proc
     let usbproc = Process::new_kern(usb_process as u64);
     SCHEDULER.add(usbproc);
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {
@@ -155,15 +159,11 @@ pub extern fn kernel_initialization_process() {
 }
 
 pub extern fn usb_process() -> ! {
-    // use crate::device::usb::G_USB;
-    //
-    // loop {
-    //     G_USB.xhci.read().iter().for_each(|c| { c.poll_ports() });
-    //     sleep(Duration::from_millis(100)).unwrap();
-    // }
+    let mut time = PIT::current_time();
     loop {
-        // hlt();
-        sleep(Duration::from_millis(100));
-        // println!("lol");
+        if (PIT::current_time() - time) > Duration::from_secs(1) {
+            println!("lol from Core {}", GLOBAL_APIC.read().apic_id());
+            time = PIT::current_time();
+        }
     }
 }

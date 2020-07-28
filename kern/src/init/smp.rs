@@ -42,8 +42,6 @@ pub fn ap_entry() -> ! {
     CORE_BOOT_FLAG.store(false, Ordering::Release);
     println!("Core with LAPIC: {} is ready", GLOBAL_APIC.read().apic_id());
 
-    panic!("");
-
     SCHEDULER.start();
 
     loop {

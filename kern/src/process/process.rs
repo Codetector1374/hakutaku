@@ -54,9 +54,10 @@ impl Process {
         let mut proc = Process {
             pid: 0,
             context: Box::new(Default::default()),
-            stack: None,
+            stack: Stack::new(),
             state: State::Ready
         };
+        proc.context.rsp = proc.stack.as_ref().expect("stack").top().as_u64();
         proc.context.rip = f;
         proc
     }

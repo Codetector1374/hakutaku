@@ -74,10 +74,6 @@ extern "C" {
 pub extern "C" fn handle_context_switch(tf: &mut TrapFrame, cause: InterruptSource) {
     match cause {
         InterruptSource::APICTimer => {
-            let apic_id = GLOBAL_APIC.read().apic_id();
-            if apic_id != 0 {
-                debug!("Context Switching Core: {}", apic_id);
-            }
             SCHEDULER.switch(Ready, tf);
         },
         InterruptSource::SysCall => {

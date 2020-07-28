@@ -235,6 +235,7 @@ pub fn mp_initialization() {
         };
         *ap_stack_top = sp;
         let apic_id = x.local_apic_id;
+        println!("Core {} stack: {:#x}", apic_id,sp);
 
         // Register core with Resman
         GLOBAL_RESMAN.write().register_core(apic_id);

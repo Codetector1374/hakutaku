@@ -1,8 +1,9 @@
-use crate::process::process::Id;
+use crate::process::process::{Id, Process};
 use crate::hardware::apic::GLOBAL_APIC;
 use hashbrown::HashMap;
 use core::fmt::{Debug, Formatter};
 use crate::ACPI;
+use crate::process::scheduler::idle_process;
 
 pub struct Processors {
     cpus: HashMap<u8, LocalCPU>,
@@ -38,6 +39,7 @@ impl Debug for Processors {
 
 pub struct LocalCPU {
     pub current_pid: Option<Id>,
+    pub idle_task: Process,
     pub proc_id: u8,
     pub apic_id: u8,
 }
@@ -52,6 +54,7 @@ impl LocalCPU {
     pub fn new(apic_id: u8, cpuid: u8) -> LocalCPU {
         LocalCPU {
             apic_id,
+            idle_task: Process::new_idle(idle_process as u64),
             proc_id: cpuid,
             current_pid: None
         }

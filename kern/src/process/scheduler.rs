@@ -15,12 +15,13 @@ use crate::{SCHEDULER, kernel_initialization_process};
 use crate::process::state::State::Running;
 use crate::process::cpu::Processors;
 use x86_64::instructions::interrupts::{without_interrupts, enable_interrupts_and_hlt};
+use core::task::Context;
 
 /// Process scheduler for the entire machine.
 #[derive(Debug)]
 pub struct GlobalScheduler(Mutex<Option<Scheduler>>);
 
-const SCHEDULER_TICK: Duration = Duration::from_millis(200);
+const SCHEDULER_TICK: Duration = Duration::from_millis(10);
 
 impl GlobalScheduler {
     /// Returns an uninitialized wrapper around a local scheduler.
@@ -34,8 +35,8 @@ impl GlobalScheduler {
         where
             F: FnOnce(&mut Scheduler) -> R,
     {
+        let mut guard = self.0.lock();
         without_interrupts(|| {
-            let mut guard = self.0.lock();
             f(guard.as_mut().expect("scheduler uninitialized"))
         })
     }
@@ -222,11 +223,11 @@ impl Scheduler {
     }
 
     fn idle(&mut self, tf: &mut TrapFrame) {
-        let mut idle = TrapFrame::default();
-        idle.rip = idle_process as u64;
-        // TODO: rethink about what stack idle process should use?
-        idle.rsp = x86_64::registers::read_rsp();
-        *tf = idle;
+        let task = &mut self.cpus.current_cpu().idle_task;
+        *task.context = TrapFrame::default();
+        task.context.rip = idle_process as u64;
+        task.context.rsp = task.stack.as_ref().expect("").top().as_u64();
+        *tf = *task.context;
     }
 
     /// Kills currently running process by scheduling out the current process

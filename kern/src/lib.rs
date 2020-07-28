@@ -141,11 +141,11 @@ pub extern fn kernel_initialization_process() {
     mp_initialization();
 
     // PCI
-    // GLOBAL_PCI.lock().initialize_bus_with_devices();
+    GLOBAL_PCI.lock().initialize_bus_with_devices();
     //
     // Usb Proc
-    // let usbproc = Process::new_kern(usb_process as u64);
-    // SCHEDULER.add(usbproc);
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {
@@ -163,6 +163,7 @@ pub extern fn usb_process() -> ! {
     // }
     loop {
         // hlt();
-        // sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
+        // println!("lol");
     }
 }

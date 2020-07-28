@@ -177,9 +177,9 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
     trace!("initializing APIC");
     GLOBAL_APIC.write().initialize();
     trace!("initialized APIC");
+    GLOBAL_APIC.read().enable_lapic(0xFF, true);
     GLOBAL_APIC.read().timer_set_lvt(InterruptIndex::ApicTimer as u8, APICTimerMode::Periodic, false);
     GLOBAL_APIC.read().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
-    GLOBAL_APIC.read().set_apic_spurious_lvt(0xFF, true);
     GLOBAL_APIC.read().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
 
     // Setup TSS / GDT / IDT

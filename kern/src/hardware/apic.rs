@@ -101,11 +101,12 @@ impl APIC {
         }.read() >> 24) as u8
     }
 
-    pub fn set_apic_spurious_lvt(&self, vector: u8, enable: bool) {
+    /// Enables the LAPIC also sets the spurious vector
+    pub fn enable_lapic(&self, spurious_vector: u8, enable: bool) {
         let word = (self.base_va.as_u64() + APIC_OFFSET_SPURIOUS_LVT) as *mut Volatile<u32>;
         unsafe {
             &mut *word
-        }.write(vector as u32 | (if enable { 1u32 } else { 0u32 }) << 8);
+        }.write(spurious_vector as u32 | (if enable { 1u32 } else { 0u32 }) << 8);
     }
 
     pub fn get_apic_spurious_lvt(&self) -> u32 {

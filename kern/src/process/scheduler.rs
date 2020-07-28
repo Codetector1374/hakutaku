@@ -245,11 +245,11 @@ impl Scheduler {
     }
 
     fn idle(&mut self, tf: &mut TrapFrame) {
-        let mut idle = TrapFrame::default();
-        idle.rip = idle_process as u64;
-        // TODO: rethink about what stack idle process should use?
-        idle.rsp = x86_64::registers::read_rsp();
-        *tf = idle;
+        let task = &mut self.cpus.current_cpu().idle_task;
+        *task.context = TrapFrame::default();
+        task.context.rip = idle_process as u64;
+        task.context.rsp = task.stack.as_ref().expect("").top().as_u64();
+        *tf = *task.context;
     }
 
     /// Kills currently running process by scheduling out the current process

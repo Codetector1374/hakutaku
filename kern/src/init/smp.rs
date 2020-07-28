@@ -31,8 +31,8 @@ pub fn ap_entry() -> ! {
 
     // LAPIC Setup
     GLOBAL_APIC.read().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
+    GLOBAL_APIC.read().enable_lapic(0xFF, true); // This also enables the APIC
     GLOBAL_APIC.read().timer_set_lvt(InterruptIndex::ApicTimer as u8, APICTimerMode::Periodic, false);
-    GLOBAL_APIC.read().set_apic_spurious_lvt(0xFF, true);
     GLOBAL_APIC.read().lint0_set_lvt(APICDeliveryMode::ExtINT, true);
 
     // Enable Interrupts

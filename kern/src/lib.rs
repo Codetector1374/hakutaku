@@ -144,12 +144,10 @@ pub extern fn kernel_initialization_process() {
     GLOBAL_PCI.lock().initialize_bus_with_devices();
     //
     // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
+    for _ in 0..10 {
+        let usbproc = Process::new_kern(usb_process as u64);
+        SCHEDULER.add(usbproc);
+    }
 
     let mut shell = Shell::new();
     loop {
@@ -161,7 +159,7 @@ pub extern fn kernel_initialization_process() {
 pub extern fn usb_process() -> ! {
     let mut time = PIT::current_time();
     loop {
-        if (PIT::current_time() - time) > Duration::from_secs(1) {
+        if (PIT::current_time() - time) > Duration::from_millis(1000) {
             println!("lol from Core {}", GLOBAL_APIC.read().apic_id());
             time = PIT::current_time();
         }

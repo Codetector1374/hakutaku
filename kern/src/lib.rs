@@ -149,18 +149,20 @@ pub extern fn kernel_initialization_process() {
 
     let mut shell = Shell::new();
     loop {
-        shell.shell("1> ");
-    }
-    loop {
-        hlt();
+        let str = format!("Core: {}>", GLOBAL_APIC.read().apic_id());
+        shell.shell(&str);
     }
 }
 
 pub extern fn usb_process() -> ! {
-    use crate::device::usb::G_USB;
-
+    // use crate::device::usb::G_USB;
+    //
+    // loop {
+    //     G_USB.xhci.read().iter().for_each(|c| { c.poll_ports() });
+    //     sleep(Duration::from_millis(100)).unwrap();
+    // }
     loop {
-        G_USB.xhci.read().iter().for_each(|c| { c.poll_ports() });
-        sleep(Duration::from_millis(100)).unwrap();
+        // hlt();
+        // sleep(Duration::from_millis(100));
     }
 }

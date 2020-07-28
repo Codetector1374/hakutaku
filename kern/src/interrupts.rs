@@ -40,6 +40,9 @@ lazy_static! {
         idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(xhci_handler as u64);
         // Syscall
         idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
+
+        // LAPIC Spurious
+        idt[0xFF].set_handler_fn(spurious_irq);
         idt
     };
 }
@@ -107,7 +110,7 @@ extern "x86-interrupt" fn nmi_handler(tf: &mut InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn div_by_zero_handler(tf: &mut InterruptStackFrame) {
-    println!("DIV0: {:#?}", tf);
+    panic!("DIV0: {:#?}", tf);
 }
 
 extern "x86-interrupt" fn overflow_handler(tf: &mut InterruptStackFrame) {

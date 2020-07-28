@@ -35,9 +35,9 @@ impl GDTInfo {
 pub fn create_gdt(tss: &'static TaskStateSegment) -> GDTInfo {
     let mut gdt = Box::new(GlobalDescriptorTable::new());
     let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
+    let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
     let user_cs = gdt.add_entry(Descriptor::user_code_segment());
     let user_ds = gdt.add_entry(Descriptor::user_data_segment());
-    let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss));
     GDTInfo {
         gdt,
         selectors: Selectors {

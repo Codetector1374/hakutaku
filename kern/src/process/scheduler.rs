@@ -20,7 +20,7 @@ use x86_64::instructions::interrupts::{without_interrupts, enable_interrupts_and
 #[derive(Debug)]
 pub struct GlobalScheduler(Mutex<Option<Scheduler>>);
 
-const SCHEDULER_TICK: Duration = Duration::from_millis(10);
+const SCHEDULER_TICK: Duration = Duration::from_millis(200);
 
 impl GlobalScheduler {
     /// Returns an uninitialized wrapper around a local scheduler.
@@ -31,8 +31,8 @@ impl GlobalScheduler {
     /// Enters a critical region and execute the provided closure with a mutable
     /// reference to the inner scheduler.
     pub fn critical<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut Scheduler) -> R,
+        where
+            F: FnOnce(&mut Scheduler) -> R,
     {
         without_interrupts(|| {
             let mut guard = self.0.lock();
@@ -86,7 +86,9 @@ impl GlobalScheduler {
         GLOBAL_APIC.write().set_timer_interval(SCHEDULER_TICK).expect("unable to set timer");
 
         let mut trap = TrapFrame::default();
-        SCHEDULER.switch_to(&mut trap);
+        SCHEDULER.critical(|s| {
+            s.idle(&mut trap)
+        });
         let tf = &mut trap as *mut TrapFrame;
         unsafe {
             asm!("mov rsp, {0}", in(reg) tf);
@@ -141,10 +143,10 @@ impl Scheduler {
                 } else {
                     None
                 }
-            },
+            }
             None => {
                 Some(69)
-            },
+            }
         };
         match next_pid {
             Some(pid) => {
@@ -152,7 +154,7 @@ impl Scheduler {
                 self.processes.push_back(process);
                 self.last_id = Some(pid);
                 Some(pid)
-            },
+            }
             None => None
         }
     }
@@ -168,21 +170,29 @@ impl Scheduler {
         if self.processes.is_empty() || self.cpus.current_cpu().current_pid.is_none() {
             return false;
         }
-        match self.processes.front().expect("no proc?").state {
-            Running => {
-                let mut proc = self.processes.pop_front().expect("Switching out nothing?");
-                let pid = self.cpus.current_cpu().current_pid.expect("No process is running?");
-                if pid != proc.pid {
-                    error!("Wrong process {} running vs {}", pid, proc.pid);
+        let mut running_process_idx: Option<usize> = None;
+        let current_pid = self.cpus.current_cpu().current_pid.unwrap();
+
+        for (idx, proc) in self.processes.iter().enumerate() {
+            if let State::Running = proc.state {
+                if proc.pid == current_pid {
+                    running_process_idx = Some(idx);
+                    break;
                 }
-                proc.context = Box::from(*tf);
+            }
+        }
+
+        match running_process_idx {
+            Some(idx) => {
+                let mut proc = self.processes.remove(idx).expect("???");
+                *proc.context = *tf;
                 proc.state = new_state;
                 self.processes.push_back(proc);
                 self.cpus.current_cpu().current_pid = None;
                 true
             },
             _ => {
-                false
+                panic!("CPU should be running something can't find the process in the list?");
             }
         }
     }
@@ -195,18 +205,17 @@ impl Scheduler {
     /// If there is no process to switch to, returns `None`. Otherwise, returns
     /// `Some` of the next process`s process ID.
     fn switch_to(&mut self, tf: &mut TrapFrame) -> Option<Id> {
-        if self.cpus.current_cpu().apic_id == 0 {
-            for i in 0..self.processes.len() {
-                let ready = self.processes[i].ready();
-                if ready {
-                    let mut proc = self.processes.remove(i).expect("something");
-                    proc.state = Running;
-                    let pid = proc.pid;
-                    self.cpus.current_cpu().current_pid = Some(pid);
-                    *tf = *proc.context;
-                    self.processes.push_front(proc);
-                    return Some(pid);
-                }
+        // debug!("Switch to on core {}", self.cpus.current_cpu().apic_id);
+        for i in 0..self.processes.len() {
+            let ready = self.processes[i].ready();
+            if ready {
+                let mut proc = self.processes.remove(i).expect("something");
+                proc.state = Running;
+                let pid = proc.pid;
+                self.cpus.current_cpu().current_pid = Some(pid);
+                *tf = *proc.context;
+                self.processes.push_front(proc);
+                return Some(pid);
             }
         }
         None
@@ -234,7 +243,7 @@ impl Scheduler {
                     let proc = self.processes.pop_back().expect("alskdjf");
                     return Some(proc.pid);
                 }
-            },
+            }
             _ => {}
         }
         None

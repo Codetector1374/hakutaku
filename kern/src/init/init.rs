@@ -20,7 +20,7 @@ use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, IPID
 use crate::hardware::apic::timer::APICTimerMode;
 use crate::hardware::pit::GLOBAL_PIT;
 use crate::init::smp::CORE_BOOT_FLAG;
-use crate::interrupts::PICS;
+use crate::interrupts::{PICS, InterruptIndex};
 use crate::KERNEL_PDPS;
 use crate::memory::align_down;
 use crate::memory::frame_allocator::MemorySegment;
@@ -177,10 +177,10 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
     trace!("initializing APIC");
     GLOBAL_APIC.write().initialize();
     trace!("initialized APIC");
-    GLOBAL_APIC.write().timer_set_lvt(0x30, APICTimerMode::Periodic, false);
-    GLOBAL_APIC.write().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
-    GLOBAL_APIC.write().set_apic_spurious_lvt(0xFF, true);
-    GLOBAL_APIC.write().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
+    GLOBAL_APIC.read().timer_set_lvt(InterruptIndex::ApicTimer as u8, APICTimerMode::Periodic, false);
+    GLOBAL_APIC.read().set_timer_interval(Duration::from_millis(0)).expect("apic set fail");
+    GLOBAL_APIC.read().set_apic_spurious_lvt(0xFF, true);
+    GLOBAL_APIC.read().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
 
     // Setup TSS / GDT / IDT
     GLOBAL_RESMAN.write().initialize();
@@ -250,5 +250,6 @@ pub fn mp_initialization() {
             sleep(Duration::from_millis(1)).expect("");
         }
         println!("Core {} Boot ACK", apic_id);
+        break;
     }
 }

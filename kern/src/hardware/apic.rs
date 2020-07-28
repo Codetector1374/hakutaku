@@ -101,7 +101,7 @@ impl APIC {
         }.read() >> 24) as u8
     }
 
-    pub fn set_apic_spurious_lvt(&mut self, vector: u8, enable: bool) {
+    pub fn set_apic_spurious_lvt(&self, vector: u8, enable: bool) {
         let word = (self.base_va.as_u64() + APIC_OFFSET_SPURIOUS_LVT) as *mut Volatile<u32>;
         unsafe {
             &mut *word
@@ -125,12 +125,12 @@ impl APIC {
     }
 
 
-    pub fn timer_set_divider(&mut self, opt: APICTimerDividerOption) {
+    pub fn timer_set_divider(&self, opt: APICTimerDividerOption) {
         let read = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_TIMER_DIVIDE) as *mut Volatile<u32>) };
         read.write(opt as u8 as u32);
     }
 
-    pub fn set_timer_interval(&mut self, duration: Duration) -> Result<(), ()> {
+    pub fn set_timer_interval(&self, duration: Duration) -> Result<(), ()> {
         use crate::hardware::apic::timer::APICTimerDividerOption::*;
         let ticks: u64 = duration.as_micros() as u64 * self.scale as u64;
         let (div_ticks, div) =
@@ -158,7 +158,7 @@ impl APIC {
         Ok(())
     }
 
-    pub fn timer_set_initial_value(&mut self, val: u32) {
+    pub fn timer_set_initial_value(&self, val: u32) {
         let read = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_TIMER_INITIAL) as *mut Volatile<u32>) };
         read.write(val);
     }
@@ -173,13 +173,13 @@ impl APIC {
         lol.read()
     }
 
-    pub fn timer_set_lvt(&mut self, vector: u8, mode: APICTimerMode, masked: bool) {
+    pub fn timer_set_lvt(&self, vector: u8, mode: APICTimerMode, masked: bool) {
         let value: u32 = vector as u32 | (mode as u32) << 17 | (if masked { 1u32 } else { 0u32 }) << 16;
         let lol = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_TIMER_LVT) as *mut Volatile<u32>) };
         lol.write(value);
     }
 
-    pub fn lint0_set_lvt(&mut self, mode: APICDeliveryMode, masked: bool) {
+    pub fn lint0_set_lvt(&self, mode: APICDeliveryMode, masked: bool) {
         let value: u32 = InterruptIndex::XHCI as u32 | (mode as u32) << 8 | (if masked { 1u32 } else { 0u32 }) << 16;
         let lol = unsafe { &mut *((self.base_va.as_u64() + APIC_OFFSET_LINT0_LVT) as *mut Volatile<u32>) };
         lol.write(value);

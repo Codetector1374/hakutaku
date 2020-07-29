@@ -13,6 +13,8 @@ use x86_64::instructions::interrupts::without_interrupts;
 use crate::device::ahci::G_AHCI;
 use crate::hardware::apic::GLOBAL_APIC;
 use crate::device::pci::class::PCIDeviceClass;
+use crate::device::uart::serial16650::{Serial16650, COM1_BASE_ADDR};
+use crate::device::uart::UART;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -235,7 +237,15 @@ impl Shell {
                     }
                 }
                 Ok(0)
-            }
+            },
+            "uart" => {
+                let mut serial = Serial16650::new_from_port(COM1_BASE_ADDR);
+                serial.write(0x69);
+                if serial.verify() {
+                    println!("Real Serail")
+                }
+                Ok(0)
+            },
             "rdblk" => {
                 use crate::storage::block::G_BLOCK_DEV_MGR;
                 use pretty_hex::*;

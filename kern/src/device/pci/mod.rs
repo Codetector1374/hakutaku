@@ -5,6 +5,7 @@ use alloc::alloc::handle_alloc_error;
 use spin::Mutex;
 use crate::device::ahci::{AHCI, G_AHCI};
 use crate::device::usb::G_USB;
+use crate::device::uart::serial16650::Serial16650;
 
 pub mod device;
 pub mod class;
@@ -129,11 +130,18 @@ impl PCIController {
                         PCIClassMassStorageClass::SATA(sata) => {
                             match sata {
                                 PCIClassMassStroageSATA::AHCI => {
-                                    debug!("AHCI on {} ", dev.bus_location_str());
                                     G_AHCI.initialize_device(dev)
                                 },
                                 _ => {}
                             }
+                        },
+                        _ => {}
+                    }
+                },
+                PCIDeviceClass::SimpleCommunicationController(comm) => {
+                    match comm {
+                        PCISimpleCommunicationControllerClass::SerialController(_) => {
+                            crate::device::uart::serial16650::pci_load_16650_serial(dev);
                         },
                         _ => {}
                     }

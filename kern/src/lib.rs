@@ -137,11 +137,11 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 }
 
 pub extern fn kernel_initialization_process() {
-    // MP initialization
-    mp_initialization();
-
     // PCI
     GLOBAL_PCI.lock().initialize_bus_with_devices();
+
+    // MP initialization
+    mp_initialization();
     //
     // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);

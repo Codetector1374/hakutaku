@@ -75,7 +75,6 @@ impl GlobalScheduler {
                 self.switch_to(tf)
             },
             _ => {
-                debug!("Failed to context switch on core {}", GLOBAL_APIC.read().apic_id());
                 0
             }
         }

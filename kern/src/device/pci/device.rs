@@ -84,6 +84,7 @@ impl PCIDevice {
             let header_type = (PORTS.lock().read_config_dword(bus, dev, func, 3) >> 16) as u8;
 
             let info = PCIDeviceInfo::new(class, rev, vid, id, header_type);
+            trace!("Device at {:04x}:{:02x}:{:x} => {:?}", bus, dev, func, &info.class);
 
             let mut dev = PCIDevice {
                 bus,

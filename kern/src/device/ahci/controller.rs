@@ -321,7 +321,9 @@ impl AHCIController {
                 error!("[AHCI] HBA Reset timeout");
                 return Err(());
             }
-            sleep(Duration::from_millis(1)).expect("slept");
+            unsafe {
+                asm!("rep", "nop");
+            }
         }
         trace!("[AHCI] Controller Reset Complete");
         Ok(())
@@ -337,7 +339,7 @@ impl AHCIController {
         if tmp & flags != 0 {
             trace!("[AHCI] Port {} is active, stopping", port);
             write_flush!(port_reg.CMD,tmp & !flags);
-            sleep(Duration::from_millis(500)).expect("slept");
+            sleep(Duration::from_millis(300)).expect("slept");
         }
         /* Add the spinup command to whatever mode bits may
 		 * already be on in the command register.

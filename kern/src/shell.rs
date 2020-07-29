@@ -14,7 +14,7 @@ use crate::device::ahci::G_AHCI;
 use crate::hardware::apic::GLOBAL_APIC;
 use crate::device::pci::class::PCIDeviceClass;
 use crate::device::uart::serial16650::{Serial16650, COM1_BASE_ADDR};
-use crate::device::uart::UART;
+use crate::device::uart::{UART, SERIAL_PORTS};
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -135,18 +135,25 @@ impl Shell {
     fn process_command(&mut self, command: &Command) -> Result<i8, ()> {
         match command.path() {
             "reboot" => {
+                info!("Triggering a Triple Fault Reboot through Shell");
                 let zero = 0u64;
                 unsafe { asm!("mov cr3, {0}", in(reg) zero) };
                 Ok(0)
             },
             "echo" => {
+                let mut print_result = String::new();
                 for (i, v) in command.args.iter().enumerate() {
                     if i == 0 {
                         continue;
                     }
-                    print!("{} ", v);
+                    print_result += v;
+                    print_result += " ";
                 }
-                print!("\n");
+                print_result.push('\n');
+                print!("{}", print_result);
+                for p in SERIAL_PORTS.read().ports.iter() {
+                    write!(p.lock(), "{}", print_result).unwrap();
+                }
                 Ok(0)
             },
             "lsahci" => {
@@ -239,10 +246,8 @@ impl Shell {
                 Ok(0)
             },
             "uart" => {
-                let mut serial = Serial16650::new_from_port(COM1_BASE_ADDR);
-                serial.write(0x69);
-                if serial.verify() {
-                    println!("Real Serail")
+                for s in SERIAL_PORTS.read().ports.iter() {
+                    s.lock().write_byte(0x69);
                 }
                 Ok(0)
             },

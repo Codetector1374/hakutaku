@@ -31,6 +31,7 @@ macro_rules! const_assert_size {
 macro_rules! pt_translate {
     ($va: expr) => {
         x86_64::instructions::interrupts::without_interrupts(|| {
+            use crate::x86_64::structures::paging::MapperAllSizes;
             crate::PAGE_TABLE.read().translate_addr(
                 $va
             ).expect("")

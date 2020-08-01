@@ -1,5 +1,5 @@
 use self::device::PCIDevice;
-use self::class::{PCIDeviceClass, HeaderType};
+use self::class::{PCIDeviceClass, HeaderType, PCISerialBusControllerClass, PCISerialBusUSB};
 use alloc::vec::Vec;
 use alloc::alloc::handle_alloc_error;
 use spin::Mutex;
@@ -146,15 +146,15 @@ impl PCIController {
                         _ => {}
                     }
                 },
-                // PCIDeviceClass::SerialBusController(serialbus) => {
-                //     match serialbus {
-                //         PCISerialBusController::USBController(usb_ctlr) => {
-                //             debug!("USB on {} ", dev.bus_location_str());
-                //             G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
-                //         },
-                //         _ => {}
-                //     }
-                // },
+                PCIDeviceClass::SerialBusController(serialbus) => {
+                    match serialbus {
+                        PCISerialBusControllerClass::USBController(usb_ctlr) => {
+                            debug!("USB on {} ", dev.bus_location_str());
+                            G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
+                        },
+                        _ => {}
+                    }
+                },
                 _ => {}
             }
         }

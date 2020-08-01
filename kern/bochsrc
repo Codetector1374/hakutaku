@@ -27,7 +27,7 @@ optramimage3: file=none
 optramimage4: file=none
 pci: enabled=1, chipset=i440fx
 vga: extension=vbe, update_freq=10, realtime=1, ddc=builtin
-cpu: count=1:1:2, ips=4000000, quantum=16, model=bx_generic, reset_on_triple_fault=0, cpuid_limit_winnt=0, ignore_bad_msrs=1, mwait_is_nop=0
+cpu: count=1:1:1, ips=4000000, quantum=16, model=bx_generic, reset_on_triple_fault=0, cpuid_limit_winnt=0, ignore_bad_msrs=1, mwait_is_nop=0
 cpuid: level=6, stepping=3, model=3, family=6, vendor_string="GenuineBochs", brand_string="              Intel(R) Pentium(R) 4 CPU        "
 cpuid: mmx=true, apic=xapic, simd=sse2, sse4a=false, misaligned_sse=false, sep=true
 cpuid: movbe=false, adx=false, aes=false, sha=false, xsave=false, xsaveopt=false, x86_64=true
@@ -41,7 +41,7 @@ clock: sync=none, time0=local, rtc_sync=0
 # no cmosimage
 log: -
 logprefix: %t%e%d
-debug: action=ignore
+debug: action=ignore, usb_xhci=report
 info: action=report
 error: action=report
 panic: action=ask

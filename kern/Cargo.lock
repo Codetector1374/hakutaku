@@ -12,9 +12,24 @@ dependencies = [
 
 [[package]]
 name = "ahash"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f33b5018f120946c1dcf279194f238a9f146725593ead1c08fa47ff22b0b5d3"
+dependencies = [
+ "const-random",
+]
+
+[[package]]
+name = "ahash"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35b909d1c126f78ace756fc337133356c499eebeefcce930fa5fb018823f2b2d"
+
+[[package]]
+name = "autocfg"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d49d90015b3c36167a20fe2810c5cd875ad504b39cff3d4eae7977e6b7c1cb2"
 
 [[package]]
 name = "autocfg"
@@ -47,6 +62,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "const-random"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f1af9ac737b2dd2d577701e59fd09ba34822f6f2ebdb30a7647405d9e55e16a"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25e4c606eb459dd29f7c57b2e0879f2b6f14ee130918c2b78ccb58a9624e6c7a"
+dependencies = [
+ "getrandom",
+ "proc-macro-hack",
+]
+
+[[package]]
 name = "core-io"
 version = "0.1.0"
 dependencies = [
@@ -60,13 +95,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d531514efb06912141fa65967447de805691b685a7565c87d1765afe34a98aa7"
 
 [[package]]
+name = "getrandom"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7abc8dd8451921606d809ba32e95b6111925cd2906060d2dcc29c070220503eb"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "wasi",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e6073d0ca812575946eb5f35ff68dbe519907b25c42530389ff946dc84c6ead"
+dependencies = [
+ "ahash 0.2.18",
+ "autocfg 0.1.7",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96282e96bfcd3da0d3aa9938bedf1e50df3269b6db08b4876d2da0bb1a0841cf"
 dependencies = [
- "ahash",
- "autocfg",
+ "ahash 0.3.3",
+ "autocfg 1.0.0",
 ]
 
 [[package]]
@@ -85,7 +141,7 @@ dependencies = [
  "acpi",
  "core-io",
  "cpuio",
- "hashbrown",
+ "hashbrown 0.7.2",
  "kernel_api",
  "lazy_static",
  "log",
@@ -95,8 +151,9 @@ dependencies = [
  "pretty-hex",
  "spin",
  "stack-vec",
- "volatile",
+ "volatile 0.2.6",
  "x86_64",
+ "xhci",
 ]
 
 [[package]]
@@ -111,6 +168,12 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 dependencies = [
  "spin",
 ]
+
+[[package]]
+name = "libc"
+version = "0.2.74"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2f02823cf78b754822df5f7f268fb59822e7296276d3e069d8e8cb26a14bd10"
 
 [[package]]
 name = "log"
@@ -162,6 +225,12 @@ name = "pretty-hex"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be91bcc43e73799dc46a6c194a55e7aae1d86cc867c860fd4a436019af21bd8c"
+
+[[package]]
+name = "proc-macro-hack"
+version = "0.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99c605b9a0adc77b7211c6b1f722dcb613d68d66859a44f3d485a6da332b0598"
 
 [[package]]
 name = "proc-macro2"
@@ -227,9 +296,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af0edf5b4faacc31fc51159244d78d65ec580f021afcef7bd53c04aeabc7f29"
 
 [[package]]
+name = "volatile"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8e76fae08f03f96e166d2dfda232190638c10e0383841252416f9cfe2ae60e6"
+
+[[package]]
+name = "wasi"
+version = "0.9.0+wasi-snapshot-preview1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cccddf32554fecc6acb585f82a32a72e28b48f8c4c1883ddfeeeaa96f7d8e519"
+
+[[package]]
 name = "x86_64"
 version = "0.11.1"
 dependencies = [
  "bit_field 0.9.0",
  "bitflags",
+]
+
+[[package]]
+name = "xhci"
+version = "0.1.0"
+dependencies = [
+ "hashbrown 0.6.3",
+ "log",
+ "modular-bitfield",
+ "volatile 0.3.0",
 ]

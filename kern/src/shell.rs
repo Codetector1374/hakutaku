@@ -179,23 +179,17 @@ impl Shell {
                 Ok(0)
             }
             "u" => {
-                let repeat = if command.args.len() > 1 {
-                    command.args[1].parse::<u32>().unwrap_or_else(|_|{1})
-                } else {
-                    1
-                };
-                for _ in 0..repeat {
-                    G_USB.xhci.read().get(0).expect("LOL").send_nop();
-                    sleep(Duration::from_millis(10)).expect("");
-                }
+                // let repeat = if command.args.len() > 1 {
+                //     command.args[1].parse::<u32>().unwrap_or_else(|_|{1})
+                // } else {
+                //     1
+                // };
+                // for _ in 0..repeat {
+                //     G_USB.xhci.read().get(0).expect("LOL").send_nop();
+                //     sleep(Duration::from_millis(10)).expect("");
+                // }
                 Ok(0)
             },
-            "p" => {
-                without_interrupts(|| {
-                    G_USB.xhci.read().get(0).expect("LOL").poll_ports();
-                });
-                Ok(0)
-            }
             "sleep" => {
                 if command.args.len() > 1 {
                     let sec = command.args[1].parse::<u64>().unwrap_or_else(|_| {0});

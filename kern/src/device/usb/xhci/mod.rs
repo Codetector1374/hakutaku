@@ -7,6 +7,7 @@ use core::time::Duration;
 use crate::hardware::pit::PIT;
 use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
+use xhci::consts::*;
 
 
 struct XhciHAL();
@@ -44,6 +45,8 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
         let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
         tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;
         dev.write_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET, tmp);
+
+        intel_ehci_xhci_handoff(&mut dev);
 
         // Step2: Setup Interrupt Lines
         // let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
@@ -87,23 +90,20 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
     error!("[XHCI] No XHCI Controller Found");
 }
 
-// Special Function to handle the intel controller
-// where a mux is used to switch ports from EHCI to
-// xHCI.
-// fn intel_ehci_xhci_handoff(&mut self) {
-//     if self.pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL &&
-//         (
-//             self.pci_device.info.device_id == 0x8c31
-//         ) {
-//         debug!("[XHCI] Intel Controller Detected: Dev: {:#x}. EHCI Handoff", self.pci_device.info.device_id);
-//         let ports = self.pci_device.read_config_dword(USB_INTEL_USB3PRM);
-//         debug!("[XHCI] [Intel] Configurable Ports to SS: {:#x}", ports);
-//         // Enable Super Speed on Ports that supports it
-//         self.pci_device.write_config_dword(USB_INTEL_USB3_PSSEN, ports);
-//
-//         let usb2_prm = self.pci_device.read_config_dword(USB_INTEL_USB2PRM);
-//         debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
-//         // TODO!!! REMOVE & PORTS, this is a hack for me to keep usb2 functional
-//         self.pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm & ports);
-//     }
-// }
+/// Special Function to handle the intel controller
+/// where a mux is used to switch ports from EHCI to
+/// xHCI.
+fn intel_ehci_xhci_handoff(pci_device: &mut PCIDevice) {
+    if pci_device.info.vendor_id == crate::device::pci::consts::VID_INTEL {
+        debug!("[XHCI] Intel Controller Detected: Dev: {:#x}. EHCI Handoff", pci_device.info.device_id);
+        let ports = pci_device.read_config_dword(USB_INTEL_USB3PRM);
+        debug!("[XHCI] [Intel] Configurable Ports to SS: {:#x}", ports);
+        // Enable Super Speed on Ports that supports it
+        pci_device.write_config_dword(USB_INTEL_USB3_PSSEN, ports);
+
+        let usb2_prm = pci_device.read_config_dword(USB_INTEL_USB2PRM);
+        debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
+        // TODO!!! REMOVE & PORTS, this is a hack for me to keep usb2 functional
+        pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm & ports);
+    }
+}

@@ -30,13 +30,16 @@ impl xhci::HAL for XhciHAL {
 fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     let old_value = dev.read_config_bar_register(0);
     dev.write_config_bar_register(0, 0xFFFF_FFFF);
-    let new_val = dev.read_config_bar_register(0);
+    let new_val = dev.read_config_bar_register(0) & 0xFFFFF000;
+    dev.write_config_bar_register(0, 0xFFFF_FFFF);
     dev.write_config_bar_register(0, old_value);
     (!new_val) as usize
 }
 
 pub fn create_from_device(id: u64, mut dev: PCIDevice) {
     if let PCIDeviceClass::SerialBusController(PCISerialBusControllerClass::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
+        debug!("XHCI Device on: {:04x}:{:02x}:{:x} -> [{:04x}]:[{:04x}]",
+               dev.bus, dev.device_number, dev.func, dev.info.vendor_id, dev.info.device_id);
         // Step1: Enable Bus Master
         let mut tmp = dev.read_config_word(crate::device::pci::consts::CONF_COMMAND_OFFSET);
         tmp |= crate::device::pci::consts::PCI_COMMAND_MASTER;
@@ -56,15 +59,15 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
         let base = dev.base_mmio_address(0).expect("xHCI can't be MMIO");
         let base_offset = base.as_u64() as usize & (4096 - 1);
         let alloc_base = base.align_down(4096u64);
-        trace!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
+        debug!("[XHCI] Address: {:?}, size: {}, offset:{}", base, size, base_offset);
         let va_root = without_interrupts(|| {
             let (va, size) = VMALLOC.lock().allocate(size + base_offset);
-            trace!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
+            debug!("[XHCI] Allocated: {} bytes MMIO Space, starting: {:?}", size, va);
             let mut fallocw = crate::memory::frame_allocator::FrameAllocWrapper{};
             for offset in (0..size).step_by(4096) {
                 let paddr = alloc_base + offset;
                 let vaddr = va + offset;
-                trace!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
+                debug!("[XHCI] Mapping offset: {}, va: {:?} pa: {:?}", offset, vaddr, paddr);
                 unsafe {
                     crate::PAGE_TABLE.write().map_to(
                         Page::<Size4KiB>::from_start_address(vaddr).expect("Unaligned VA"),

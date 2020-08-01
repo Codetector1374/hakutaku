@@ -15,7 +15,12 @@ impl log::Log for KernelLogger {
             // Record.target
             println!("[{}] {}", record.level(), record.args());
             if let Some(p) = SERIAL_PORTS.read().ports.values().find(|_|{true}) {
-                write!(p.lock(), "[{:?}][{}]: {}\n", &record.level(), record.target(), record.args()).unwrap();
+                match p.try_lock() {
+                    Some(mut p) => {
+                        write!(p, "[{:?}][{}]: {}\n", &record.level(), record.target(), record.args()).unwrap();
+                    },
+                    _ => {}
+                }
             }
         }
     }

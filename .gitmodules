@@ -4,3 +4,6 @@
 [submodule "libs/acpi"]
 	path = libs/acpi
 	url = git@github.com:Codetector1374/acpi.git
+[submodule "libs/xhci-rs"]
+	path = libs/xhci-rs
+	url = https://github.com/Pear0/xhci-rs.git

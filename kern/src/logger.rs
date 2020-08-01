@@ -13,11 +13,9 @@ impl log::Log for KernelLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             // Record.target
-            if record.level() < Level::Trace {
-                println!("[{}] {}", record.level(), record.args());
-            }
-            for p in SERIAL_PORTS.read().ports.iter() {
-                write!(p.lock(), "[{}][{}]: {}\n", record.level(), record.target(), record.args()).unwrap();
+            println!("[{}] {}", record.level(), record.args());
+            if let Some(p) = SERIAL_PORTS.read().ports.values().find(|_|{true}) {
+                write!(p.lock(), "[{:?}][{}]: {}\n", &record.level(), record.target(), record.args()).unwrap();
             }
         }
     }
@@ -31,7 +29,7 @@ pub unsafe fn init_logger() {
             log::set_max_level(if let Some(_) = option_env!("VERBOSE_BUILD") {
                 LevelFilter::Trace
             } else {
-                LevelFilter::Trace
+                LevelFilter::Debug
             })
         })
         .expect("Failed to initialize the logger");

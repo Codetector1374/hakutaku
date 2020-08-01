@@ -191,5 +191,5 @@ pub fn pci_load_16650_serial(dev: PCIDevice) {
     uart.set_baudrate(115200);
     uart.initialize();
 
-    SERIAL_PORTS.write().ports.push(Arc::new(Mutex::new(uart)));
+    SERIAL_PORTS.write().register_port(Arc::new(Mutex::new(uart)));
 }

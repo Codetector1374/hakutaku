@@ -2,10 +2,14 @@ use spin::{RwLock, Mutex};
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use hashbrown::HashMap;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 pub mod serial16650;
 
-pub static SERIAL_PORTS: RwLock<SerialPorts> = RwLock::new(SerialPorts::new());
+lazy_static! {
+    pub static ref SERIAL_PORTS: RwLock<SerialPorts> = RwLock::new(SerialPorts::new());
+}
 
 pub trait UART : core_io::Write + core_io::Read + core::fmt::Write {
     fn set_baudrate(&mut self, baud: u32);
@@ -15,13 +19,21 @@ pub trait UART : core_io::Write + core_io::Read + core::fmt::Write {
 }
 
 pub struct SerialPorts {
-    pub ports: Vec<Arc<Mutex<dyn UART + Send + Sync>>>
+    next_id: AtomicU64,
+    pub ports: HashMap<u64, Arc<Mutex<dyn UART + Send + Sync>>>
 }
 
 impl SerialPorts {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            ports: Vec::new()
+            next_id: AtomicU64::new(1),
+            ports: HashMap::new()
         }
+    }
+
+    pub fn register_port(&mut self, port: Arc<Mutex<dyn UART + Send + Sync>>) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::AcqRel);
+        self.ports.insert(id, port);
+        id
     }
 }

@@ -33,6 +33,10 @@ extern "C" {
     static mut __ap_stack_top: u64;
 }
 
+pub struct BootArgs {
+    early_serial_port: u16
+}
+
 pub fn boostrap_core_init(boot_info: BootInformation) {
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");

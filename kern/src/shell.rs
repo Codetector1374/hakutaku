@@ -151,7 +151,7 @@ impl Shell {
                 }
                 print_result.push('\n');
                 print!("{}", print_result);
-                for p in SERIAL_PORTS.read().ports.iter() {
+                for p in SERIAL_PORTS.read().ports.values() {
                     write!(p.lock(), "{}", print_result).unwrap();
                 }
                 Ok(0)
@@ -246,7 +246,7 @@ impl Shell {
                 Ok(0)
             },
             "uart" => {
-                for s in SERIAL_PORTS.read().ports.iter() {
+                for s in SERIAL_PORTS.read().ports.values() {
                     s.lock().write_byte(0x69);
                 }
                 Ok(0)

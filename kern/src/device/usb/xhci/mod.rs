@@ -8,6 +8,7 @@ use crate::hardware::pit::PIT;
 use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
 use crate::device::usb::xhci::consts::*;
+use core::alloc::Layout;
 
 pub mod consts;
 
@@ -28,6 +29,8 @@ impl xhci::HAL for XhciHAL {
     fn translate_addr(&self, addr: u64) -> u64 {
         pt_translate!(VirtAddr::new(addr)).as_u64()
     }
+
+    fn flush_cache(&self, _addr: u64, _len: u64) {}
 }
 
 fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {

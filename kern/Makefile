@@ -8,7 +8,6 @@ DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
 						 -m 1G \
-						 -serial stdio \
 						 -smp cpus=4 \
 						 -boot order=d \
 						 -device qemu-xhci \

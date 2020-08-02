@@ -36,15 +36,23 @@ pub struct Serial16650 {
 
 impl Serial16650 {
     pub fn new_from_port(base: u16) -> Self {
-        Self {
+        let mut thing = Self {
             base_addr: PMIO(base)
+        };
+        if thing.verify() {
+            thing.initialize();
         }
+        thing
     }
 
     pub fn new_from_mmio(mmio_base: VirtAddr) -> Self {
-        Self {
+        let mut thing = Self {
             base_addr: MMIO(mmio_base)
+        };
+        if thing.verify() {
+            thing.initialize();
         }
+        thing
     }
 
     fn initialize(&mut self) {
@@ -57,7 +65,7 @@ impl Serial16650 {
         unsafe {
             match self.base_addr {
                 PMIO(base) => {
-                    x86_64::instructions::port::Port::new(base + OFFSET_SCRATCH).read()
+                    x86_64::instructions::port::Port::new(base + offset).read()
                 }
                 MMIO(base) => {
                     *((base + 0x280u64 + ((offset as u64) * 4)).as_u64() as *mut u32) as u8
@@ -70,7 +78,7 @@ impl Serial16650 {
         unsafe {
             match self.base_addr {
                 PMIO(base) => {
-                    x86_64::instructions::port::Port::new(base + OFFSET_SCRATCH).write(value);
+                    x86_64::instructions::port::Port::new(base + offset).write(value);
                 }
                 MMIO(base) => {
                     *((base + 0x280u64 + ((offset as u64) * 4)).as_u64() as *mut u32) = value as u32
@@ -189,7 +197,6 @@ pub fn pci_load_16650_serial(dev: PCIDevice) {
     }
     info!("[UART] 16650 Driver Loaded and Verified.");
     uart.set_baudrate(115200);
-    uart.initialize();
 
     SERIAL_PORTS.write().register_port(Arc::new(Mutex::new(uart)));
 }

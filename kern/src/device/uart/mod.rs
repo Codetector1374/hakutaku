@@ -4,6 +4,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use hashbrown::HashMap;
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::device::uart::serial16650::Serial16650;
 
 pub mod serial16650;
 
@@ -33,7 +34,19 @@ impl SerialPorts {
 
     pub fn register_port(&mut self, port: Arc<Mutex<dyn UART + Send + Sync>>) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::AcqRel);
+        if id == 1 {
+            self.ports.clear();
+        }
         self.ports.insert(id, port);
         id
+    }
+
+    pub fn register_early_serial(&mut self, port: u16) {
+        let mut port = Serial16650::new_from_port(port);
+        if port.verify() {
+            debug!("[Early Serial] Valid Serial Found");
+            port.set_baudrate(115200);
+            self.ports.insert(0, Arc::new(Mutex::new(port)));
+        }
     }
 }

@@ -26,6 +26,7 @@ use crate::memory::align_down;
 use crate::memory::frame_allocator::MemorySegment;
 use crate::memory::paging::{KERNEL_HEAP_BASE, KERNEL_HEAP_TOP, KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE};
 use crate::hardware::resman::GLOBAL_RESMAN;
+use crate::device::uart::serial16650::COM1_BASE_ADDR;
 
 extern "C" {
     static mut __kernel_start: u64;
@@ -38,6 +39,7 @@ pub struct BootArgs {
 }
 
 pub fn boostrap_core_init(boot_info: BootInformation) {
+
     // Configure Memory System
     let mem_tags = boot_info.memory_map_tag().expect("No Mem Tags");
     let kernel_start = unsafe { &__kernel_start as *const u64 as u64 };
@@ -176,6 +178,8 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
         );
     }
     debug!("[kALLOC] Kernel Allocator Initialized");
+
+    crate::device::uart::SERIAL_PORTS.write().register_early_serial(COM1_BASE_ADDR);
 
     // Initialize APIC
     trace!("initializing APIC");

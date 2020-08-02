@@ -7,7 +7,9 @@ use core::time::Duration;
 use crate::hardware::pit::PIT;
 use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
-use xhci::consts::*;
+use crate::device::usb::xhci::consts::*;
+
+pub mod consts;
 
 
 struct XhciHAL();
@@ -50,7 +52,7 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
 
         // Step2: Setup Interrupt Lines
         // let interrupt_number = (InterruptIndex::XHCI).as_offset() as u32;
-        // dev.write_config_dword_dep(0xF, interrupt_number | 0x1 << 8);
+        // dev.write_config_dword_dep(0xF, interrupt_number);
         // let interrupt = dev.read_config_dword_dep(0xF);
         // let int_line = (interrupt >> 8) as u8;
         // let int_num = interrupt as u8;

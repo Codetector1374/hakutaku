@@ -141,7 +141,7 @@ pub extern fn kernel_initialization_process() {
     GLOBAL_PCI.lock().initialize_bus_with_devices();
 
     // MP initialization
-    // mp_initialization();
+    mp_initialization();
     //
     // Usb Proc
     // let usbproc = Process::new_kern(usb_process as u64);

@@ -14,13 +14,18 @@ impl log::Log for KernelLogger {
         if self.enabled(record.metadata()) {
             // Record.target
             println!("[{}] {}", record.level(), record.args());
-            if let Some(p) = SERIAL_PORTS.read().ports.values().find(|_|{true}) {
-                match p.try_lock() {
-                    Some(mut p) => {
-                        write!(p, "[{:?}][{}]: {}\n", &record.level(), record.target(), record.args()).unwrap();
-                    },
-                    _ => {}
-                }
+            match SERIAL_PORTS.try_read() {
+                Some(r_handele) => {
+                    if let Some(p) = r_handele.ports.values().find(|_|{true}) {
+                        match p.try_lock() {
+                            Some(mut p) => {
+                                write!(p, "[{:?}][{}]: {}\n", &record.level(), record.target(), record.args()).unwrap();
+                            },
+                            _ => {}
+                        }
+                    }
+                },
+                _ => {}
             }
         }
     }

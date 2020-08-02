@@ -179,7 +179,10 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
     }
     debug!("[kALLOC] Kernel Allocator Initialized");
 
-    crate::device::uart::SERIAL_PORTS.write().register_early_serial(COM1_BASE_ADDR);
+    // Initialize Early Serial
+    if !crate::device::uart::SERIAL_PORTS.write().register_early_serial(COM1_BASE_ADDR) {
+        crate::device::uart::SERIAL_PORTS.write().register_early_serial(0x0d00);
+    }
 
     // Initialize APIC
     trace!("initializing APIC");

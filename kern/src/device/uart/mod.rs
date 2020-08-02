@@ -37,16 +37,19 @@ impl SerialPorts {
         if id == 1 {
             self.ports.clear();
         }
+        writeln!(port.lock(), "=============== PORT REGISTERED ======================").unwrap();
         self.ports.insert(id, port);
         id
     }
 
-    pub fn register_early_serial(&mut self, port: u16) {
+    pub fn register_early_serial(&mut self, port: u16) -> bool {
         let mut port = Serial16650::new_from_port(port);
         if port.verify() {
             debug!("[Early Serial] Valid Serial Found");
             port.set_baudrate(115200);
             self.ports.insert(0, Arc::new(Mutex::new(port)));
+            return true
         }
+        false
     }
 }

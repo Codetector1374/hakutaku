@@ -48,7 +48,11 @@ usb: $(iso)
 				    -device usb-storage,drive=my_usb_disk,id=usb0
 
 run: $(iso)
-	@$(QEMU) $(QEMU_ARGS)
+	@$(QEMU) $(QEMU_ARGS) \
+		-device usb-mouse \
+		-device usb-mouse \
+		-device usb-mouse \
+		-device usb-mouse \
 
 gdb: $(iso)
 	@$(QEMU) -s -S $(QEMU_ARGS)

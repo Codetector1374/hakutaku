@@ -11,7 +11,7 @@ use crate::device::usb::xhci::consts::*;
 use core::alloc::Layout;
 
 pub mod consts;
-
+static XHCI_HAL: XhciHAL = XhciHAL();
 
 struct XhciHAL();
 
@@ -88,8 +88,7 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
             va
         });
         let mmio_vbase = va_root + base_offset;
-        let hal = XhciHAL();
-        xhci::do_stuff(mmio_vbase.as_u64(), &hal)
+        xhci::do_stuff(mmio_vbase.as_u64(), &XHCI_HAL)
 
     }
     error!("[XHCI] No XHCI Controller Found");

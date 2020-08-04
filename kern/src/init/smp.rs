@@ -43,13 +43,6 @@ pub fn ap_entry() -> ! {
     println!("Core with LAPIC: {} is ready", GLOBAL_APIC.read().apic_id());
 
     SCHEDULER.start();
-
-    loop {
-        println!("SMP Core Sleep");
-        hlt();
-    }
-
-    panic!("DIE");
 }
 
 pub extern fn thing() -> ! {

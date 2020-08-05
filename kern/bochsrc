@@ -50,8 +50,8 @@ mouse: type=ps2, enabled=false, toggle=ctrl+mbutton
 speaker: enabled=true, mode=system
 parport1: enabled=true, file=none
 parport2: enabled=false
-com1: enabled=true, mode=file, dev=bochs_uart.log
+com1: enabled=true, mode=file, dev="bochs_uart.log"
 com2: enabled=false
 com3: enabled=false
 com4: enabled=false
-usb_xhci: enabled=1, port1="disk:ext/demo_usb.img", options1=none, port2=none, options2=none, port3=none, options3=none, port4=none, options4=none
+usb_xhci: enabled=1, port1=none, options1=none, port2=none, options2=none, port3="hub", options3=none, port4=none, options4=none

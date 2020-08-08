@@ -7,14 +7,14 @@ rust_os := target/$(target)/release/libkern.a
 DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
-						 -serial stdio \
 						 -m 1G \
 						 -smp cpus=4 \
 						 -boot order=d \
 						 -device qemu-xhci \
 						 -drive id=main_disk,file=ext/demo.img,if=none \
 						 -device ide-hd,drive=main_disk \
-						 --trace events=./qemu_trace
+						 --trace events=./qemu_trace \
+						 -serial stdio
 
 linker_script := src/arch/$(arch)/linker.ld
 grub_cfg := src/arch/$(arch)/grub.cfg

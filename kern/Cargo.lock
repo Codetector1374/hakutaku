@@ -322,5 +322,6 @@ dependencies = [
  "hashbrown 0.6.3",
  "log",
  "modular-bitfield",
+ "spin",
  "volatile 0.3.0",
 ]

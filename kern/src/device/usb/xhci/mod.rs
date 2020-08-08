@@ -9,6 +9,7 @@ use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
 use crate::device::usb::xhci::consts::*;
 use core::alloc::Layout;
+use xhci::FlushType;
 
 pub mod consts;
 static XHCI_HAL: XhciHAL = XhciHAL();
@@ -30,7 +31,8 @@ impl xhci::HAL for XhciHAL {
         pt_translate!(VirtAddr::new(addr)).as_u64()
     }
 
-    fn flush_cache(&self, _addr: u64, _len: u64) {}
+    fn flush_cache(&self, _addr: u64, _len: u64, _flush: FlushType) {
+    }
 }
 
 fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {

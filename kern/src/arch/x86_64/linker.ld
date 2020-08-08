@@ -1,6 +1,9 @@
 ENTRY(_start)
 
 SECTIONS {
+    .multiboot : {
+        KEEP(*(.multiboot_header))
+    }
     . = 0x8000;
 
     __smp_start = .;
@@ -13,7 +16,6 @@ SECTIONS {
 
     .boot :
     {
-        KEEP(*(.multiboot_header))
         KEEP(*(.text_init .text_init.*))
         *(.rodata.init)
         *(.bss_init)

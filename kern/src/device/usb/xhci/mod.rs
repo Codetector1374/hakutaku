@@ -9,7 +9,7 @@ use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
 use crate::device::usb::xhci::consts::*;
 use core::alloc::Layout;
-use xhci::FlushType;
+use xhci::{FlushType, Xhci};
 
 pub mod consts;
 static XHCI_HAL: XhciHAL = XhciHAL();
@@ -90,7 +90,11 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
             va
         });
         let mmio_vbase = va_root + base_offset;
-        xhci::do_stuff(mmio_vbase.as_u64(), &XHCI_HAL)
+
+        let mut xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
+        if dev.info.vendor_id == 0x1b21 { // ASMedia
+            xhci.quirks.no_reset_before_address_device = true;
+        }
 
     }
     error!("[XHCI] No XHCI Controller Found");
@@ -110,6 +114,6 @@ fn intel_ehci_xhci_handoff(pci_device: &mut PCIDevice) {
         let usb2_prm = pci_device.read_config_dword(USB_INTEL_USB2PRM);
         debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
         // TODO!!! REMOVE & PORTS, this is a hack for me to keep usb2 functional
-        pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm & ports);
+        pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm);
     }
 }

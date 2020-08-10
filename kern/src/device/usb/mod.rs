@@ -37,19 +37,7 @@ impl USBSystem {
     pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
-                without_interrupts(|| {
-                    self::xhci::create_from_device(self.next_controller_id.fetch_add(1, Ordering::Acquire), dev);
-                    // if dev.is_some() {
-                    //     match self.xhci.try_write() {
-                    //         Some(mut guard) => {
-                    //             guard.push(Arc::new(dev.expect("")));
-                    //         },
-                    //         None => {
-                    //             error!("[USB] Failed to obtain mutex");
-                    //         }
-                    //     }
-                    // }
-                });
+                self::xhci::create_from_device(self.next_controller_id.fetch_add(1, Ordering::Acquire), dev);
             },
             _ => {
                 debug!("[USB] Unknown USB Host Type at {}: {:?}",

@@ -149,6 +149,10 @@ impl PCIController {
                 PCIDeviceClass::SerialBusController(serialbus) => {
                     match serialbus {
                         PCISerialBusControllerClass::USBController(usb_ctlr) => {
+                            if dev.info.vendor_id == 0x8086 {
+                                info!("Skipping Intel XHCI");
+                                continue;
+                            }
                             debug!("USB on {} ", dev.bus_location_str());
                             G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
                         },

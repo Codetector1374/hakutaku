@@ -93,7 +93,13 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
 
         let mut xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
         if dev.info.vendor_id == 0x1b21 { // ASMedia
-            xhci.quirks.no_reset_before_address_device = true;
+            // xhci.quirks.no_reset_before_address_device = true;
+        }
+        match xhci.do_stuff() {
+            Ok(_) => { info!("XHCI did Stuff"); },
+            Err(e) => {
+                warn!("XHCI Error while doing stuff: {:?}", e)
+            }
         }
 
     }

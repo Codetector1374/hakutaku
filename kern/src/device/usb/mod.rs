@@ -37,6 +37,10 @@ impl USBSystem {
     pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
         match ctlr_type {
             PCISerialBusUSB::XHCI => {
+                if dev.info.vendor_id == 0x8086 {
+                    info!("Skipping Intel XHCI");
+                    return;
+                }
                 self::xhci::create_from_device(self.next_controller_id.fetch_add(1, Ordering::Acquire), dev);
             },
             _ => {

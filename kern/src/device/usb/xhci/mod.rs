@@ -9,7 +9,10 @@ use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
 use crate::device::usb::xhci::consts::*;
 use core::alloc::Layout;
-use xhci::{FlushType, Xhci};
+use xhci::{FlushType, Xhci, XhciWrapper};
+use usb_host::USBHost;
+use alloc::sync::Arc;
+use spin::Mutex;
 
 pub mod consts;
 static XHCI_HAL: XhciHAL = XhciHAL();
@@ -35,6 +38,16 @@ impl xhci::HAL for XhciHAL {
     }
 }
 
+impl usb_host::HAL2 for XhciHAL{
+    fn sleep(dur: Duration) {
+        sleep(dur).expect("slept???");
+    }
+
+    fn current_time() -> Duration {
+        PIT::current_time()
+    }
+}
+
 fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     let old_value = dev.read_config_bar_register(0);
     dev.write_config_bar_register(0, 0xFFFF_FFFF);
@@ -42,7 +55,7 @@ fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     dev.write_config_bar_register(0, 0xFFFF_FFFF);
     dev.write_config_bar_register(0, old_value);
     (!new_val) as usize
-izhirui.github.io}
+}
 
 pub fn create_from_device(id: u64, mut dev: PCIDevice) {
     if let PCIDeviceClass::SerialBusController(PCISerialBusControllerClass::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
@@ -89,18 +102,14 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
             }
             va
         });
-        let mmio_vbase = va_root + base_offset;
 
-        let mut xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
-        if dev.info.vendor_id == 0x1b21 { // ASMedia
-            // xhci.quirks.no_reset_before_address_device = true;
-        }
-        match xhci.do_stuff() {
-            Ok(_) => { info!("XHCI did Stuff"); },
-            Err(e) => {
-                warn!("XHCI Error while doing stuff: {:?}", e)
-            }
-        }
+        let mmio_vbase = va_root + base_offset;
+        let xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
+        let xhci_controller = Arc::new(XhciWrapper(Mutex::new(xhci)));
+        let mut usbhost = USBHost::<XhciHAL>::new();
+        let root_device = usbhost.attach_root_hub(xhci_controller);
+        USBHost::<XhciHAL>::setup_new_device(root_device);
+
 
     }
     error!("[XHCI] No XHCI Controller Found");

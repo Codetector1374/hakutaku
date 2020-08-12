@@ -297,6 +297,7 @@ dependencies = [
  "downcast-rs",
  "hashbrown 0.6.3",
  "log",
+ "modular-bitfield",
  "spin",
 ]
 
@@ -336,9 +337,11 @@ dependencies = [
 name = "xhci"
 version = "0.1.0"
 dependencies = [
+ "downcast-rs",
  "hashbrown 0.6.3",
  "log",
  "modular-bitfield",
  "spin",
+ "usb-host",
  "volatile 0.3.0",
 ]

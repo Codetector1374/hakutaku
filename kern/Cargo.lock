@@ -95,6 +95,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d531514efb06912141fa65967447de805691b685a7565c87d1765afe34a98aa7"
 
 [[package]]
+name = "downcast-rs"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
+
+[[package]]
 name = "getrandom"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -151,6 +157,7 @@ dependencies = [
  "pretty-hex",
  "spin",
  "stack-vec",
+ "usb-host",
  "volatile 0.2.6",
  "x86_64",
  "xhci",
@@ -282,6 +289,16 @@ name = "unicode-xid"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
+
+[[package]]
+name = "usb-host"
+version = "0.1.0"
+dependencies = [
+ "downcast-rs",
+ "hashbrown 0.6.3",
+ "log",
+ "spin",
+]
 
 [[package]]
 name = "void"

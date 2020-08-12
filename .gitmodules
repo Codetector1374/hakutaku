@@ -7,3 +7,6 @@
 [submodule "libs/xhci-rs"]
 	path = libs/xhci-rs
 	url = https://github.com/Pear0/xhci-rs.git
+[submodule "libs/usb-host-rs"]
+	path = libs/usb-host-rs
+	url = https://github.com/Codetector1374/usb-host-rs

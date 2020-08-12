@@ -25,6 +25,7 @@ log = "^0.4.8"
 pretty-hex="0.1.1"
 modular-bitfield = "0.6.0"
 xhci = { path="../libs/xhci-rs" }
+usb-host = { path="../libs/usb-host-rs" }
 [dependencies.lazy_static]
 version = "1.4.0"
 features = ["spin_no_std"]

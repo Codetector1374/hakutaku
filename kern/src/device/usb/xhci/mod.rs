@@ -42,7 +42,7 @@ fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     dev.write_config_bar_register(0, 0xFFFF_FFFF);
     dev.write_config_bar_register(0, old_value);
     (!new_val) as usize
-}
+izhirui.github.io}
 
 pub fn create_from_device(id: u64, mut dev: PCIDevice) {
     if let PCIDeviceClass::SerialBusController(PCISerialBusControllerClass::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {

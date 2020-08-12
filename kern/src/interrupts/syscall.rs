@@ -4,7 +4,7 @@ use core::time::Duration;
 use crate::process::state::State;
 use alloc::boxed::Box;
 use crate::process::process::Process;
-use crate::hardware::pit::PIT;
+use crate::sys::pit::PIT;
 use crate::SCHEDULER;
 use kernel_api::OsError;
 use kernel_api::*;

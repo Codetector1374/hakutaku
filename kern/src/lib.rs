@@ -53,9 +53,9 @@ use crate::arch::x86_64::KernACPIHandler;
 use crate::device::ahci::G_AHCI;
 use crate::device::pci::GLOBAL_PCI;
 use crate::device::usb::G_USB;
-use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode};
-use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
-use crate::hardware::pit::{GLOBAL_PIT, spin_wait, PIT};
+use crate::sys::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode};
+use crate::sys::apic::timer::{APICTimerDividerOption, APICTimerMode};
+use crate::sys::pit::{GLOBAL_PIT, spin_wait, PIT};
 use crate::interrupts::{InterruptIndex, PICS};
 use crate::memory::{align_down, align_up};
 use crate::memory::allocator::Allocator;
@@ -78,7 +78,7 @@ mod macros;
 pub mod storage;
 pub mod config;
 pub mod init;
-pub mod hardware;
+pub mod sys;
 pub mod device;
 pub mod interrupts;
 pub mod memory;
@@ -86,6 +86,7 @@ pub mod shell;
 pub mod logger;
 pub mod process;
 pub mod arch;
+pub mod fs;
 
 lazy_static! {
     static ref PAGE_TABLE: RwLock<OffsetPageTable<'static>> = {
@@ -117,7 +118,7 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     boostrap_core_init(boot_info);
 
     // Must initialize after allocator
-    hardware::keyboard::initialize();
+    sys::keyboard::initialize();
 
     let mfg_string = x86_64::instructions::cpuid::mfgid();
     let str = String::from_utf8_lossy(&mfg_string).into_owned();

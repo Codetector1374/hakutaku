@@ -46,11 +46,11 @@ Bits         Usage
                  1 1 = Access mode: lobyte/hibyte
  1 to 3       Operating mode :
                  0 0 0 = Mode 0 (interrupt on terminal count)
-                 0 0 1 = Mode 1 (hardware re-triggerable one-shot)
+                 0 0 1 = Mode 1 (sys re-triggerable one-shot)
                  0 1 0 = Mode 2 (rate generator)
                  0 1 1 = Mode 3 (square wave generator)
                  1 0 0 = Mode 4 (software triggered strobe)
-                 1 0 1 = Mode 5 (hardware triggered strobe)
+                 1 0 1 = Mode 5 (sys triggered strobe)
                  1 1 0 = Mode 2 (rate generator, same as 010b)
                  1 1 1 = Mode 3 (square wave generator, same as 011b)
  0            BCD/Binary mode: 0 = 16-bit binary, 1 = four-digit BCD

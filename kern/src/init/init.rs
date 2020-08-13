@@ -194,7 +194,11 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
     GLOBAL_APIC.read().lint0_set_lvt(APICDeliveryMode::ExtINT, false);
 
     // Setup TSS / GDT / IDT
-    GLOBAL_RESMAN.write().initialize();
+    {
+        let mut x = GLOBAL_RESMAN.write();
+        x.initialize();
+        x.register_core(GLOBAL_APIC.read().apic_id());
+    }
 
     unsafe { GLOBAL_RESMAN.read().get_gdt(GLOBAL_APIC.read().apic_id()).load(); }
     interrupts::init_idt();

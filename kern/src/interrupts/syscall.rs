@@ -33,7 +33,7 @@ pub fn sys_sleep(tf: &mut TrapFrame) {
     let start = PIT::current_time();
     let delta = Duration::from_millis(tf.rdi);
     let target = start + delta;
-    trace!("handling sleep syscall: {:?}", delta);
+    debug!("handling sleep syscall: {:?}", delta);
     let wait = State::Waiting(Box::new(move |p: &mut Process| -> bool {
         let t = PIT::current_time();
         if t >= target {

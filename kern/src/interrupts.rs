@@ -12,6 +12,7 @@ use crate::interrupts::context_switch::{apic_timer, syscall_handler};
 use crate::hardware::pit::GLOBAL_PIT;
 use keyboard::*;
 use crate::interrupts::InterruptIndex::XHCI;
+use x86_64::PrivilegeLevel;
 
 pub mod context_switch;
 mod keyboard;
@@ -39,7 +40,8 @@ lazy_static! {
         idt[InterruptIndex::ApicTimer.as_usize()].set_handler_addr(apic_timer as u64);
         idt[InterruptIndex::XHCI.as_usize()].set_handler_addr(xhci_handler as u64);
         // Syscall
-        idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64);
+        idt[InterruptIndex::SysCall.as_usize()].set_handler_addr(syscall_handler as u64)
+            .set_privilege_level(PrivilegeLevel::Ring3);
 
         // LAPIC Spurious
         idt[0xFF].set_handler_fn(spurious_irq);

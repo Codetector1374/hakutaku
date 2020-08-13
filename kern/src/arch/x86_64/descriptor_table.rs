@@ -8,16 +8,17 @@ use alloc::boxed::Box;
 
 pub const DOUBLE_FAULT_IST_INDEX: usize = 0;
 
-struct Selectors {
-    code_selector: SegmentSelector,
-    user_cs: SegmentSelector,
-    user_ds: SegmentSelector,
-    tss_selector: SegmentSelector,
+#[derive(Debug, Clone)]
+pub struct Selectors {
+    pub code_selector: SegmentSelector,
+    pub user_cs: SegmentSelector,
+    pub user_ds: SegmentSelector,
+    pub tss_selector: SegmentSelector,
 }
 
 pub struct GDTInfo {
     gdt: Box<GlobalDescriptorTable>,
-    selectors: Selectors,
+    pub selectors: Selectors,
 }
 
 impl GDTInfo {
@@ -52,17 +53,21 @@ pub fn create_gdt(tss: &'static TaskStateSegment) -> GDTInfo {
 /* ============================ TSS ============================================================= */
 
 pub struct TSSInfo {
-    stack: Box<[u8; 1024]>,
+    stack: Box<[u64; 128]>,
+    k_stack: Box<[u64; 1024]>,
     tss: Box<TaskStateSegment>,
 }
 
 pub fn create_tss() -> TSSInfo {
-    let stack = Box::new([0u8; 1024]);
+    let stack = Box::new([0u64; 128]);
+    let k_stack = Box::new([0u64; 1024]);
     let mut tss = Box::new(TaskStateSegment::new());
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX] =
-        (VirtAddr::from_ptr(stack.as_ptr()) + stack.len() as u64 - 1u64).align_down(8u64);
+        (VirtAddr::from_ptr(stack.as_ptr()) + (stack.len() * core::mem::size_of::<u64>()) as u64 - 1u64).align_down(8u64);
+    tss.privilege_stack_table[0] = (VirtAddr::from_ptr(k_stack.as_ptr()) + (k_stack.len() * core::mem::size_of::<u64>()) as u64 - 1u64).align_down(8u64);
     TSSInfo {
         stack,
+        k_stack,
         tss,
     }
 }

@@ -5,6 +5,7 @@ use crate::arch::x86_64::descriptor_table::{GDTInfo, TSSInfo};
 use spin::RwLock;
 use crate::hardware::apic::GLOBAL_APIC;
 use alloc::boxed::Box;
+use x86_64::VirtAddr;
 
 pub static GLOBAL_RESMAN: RwLock<ResourceManager> = RwLock::new(ResourceManager::uninitialized());
 
@@ -29,13 +30,11 @@ impl ResourceManager {
 
         // Initialize TSSes
         self.tsses = Some(HashMap::new());
-
-        self.register_core(GLOBAL_APIC.read().apic_id());
     }
 
     pub fn register_core(&mut self, lapic_id: u8) {
         debug!("[RESMAN] Registering Core {}", lapic_id);
-        let tss = crate::arch::x86_64::descriptor_table::create_tss();
+        let mut tss = crate::arch::x86_64::descriptor_table::create_tss();
         let gdt = crate::arch::x86_64::descriptor_table::create_gdt(tss.get_tss_ptr());
 
         self.gdts.as_mut().unwrap().insert(lapic_id, gdt);

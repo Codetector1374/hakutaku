@@ -3,7 +3,7 @@
 use hashbrown::HashMap;
 use crate::arch::x86_64::descriptor_table::{GDTInfo, TSSInfo};
 use spin::RwLock;
-use crate::hardware::apic::GLOBAL_APIC;
+use crate::sys::apic::GLOBAL_APIC;
 use alloc::boxed::Box;
 use x86_64::VirtAddr;
 

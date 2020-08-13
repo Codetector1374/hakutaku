@@ -1,5 +1,5 @@
 use x86_64::structures::idt::InterruptStackFrame;
-use crate::hardware::apic::GLOBAL_APIC;
+use crate::sys::apic::GLOBAL_APIC;
 use x86_64::registers::rflags::RFlags;
 use crate::SCHEDULER;
 use crate::process::state::State::Ready;

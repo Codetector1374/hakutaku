@@ -1,5 +1,5 @@
 use crate::process::process::{Id, Process};
-use crate::hardware::apic::GLOBAL_APIC;
+use crate::sys::apic::GLOBAL_APIC;
 use hashbrown::HashMap;
 use core::fmt::{Debug, Formatter};
 use crate::ACPI;

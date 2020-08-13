@@ -56,9 +56,9 @@ use crate::arch::x86_64::KernACPIHandler;
 use crate::device::ahci::G_AHCI;
 use crate::device::pci::GLOBAL_PCI;
 use crate::device::usb::G_USB;
-use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, APIC};
-use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
-use crate::hardware::pit::{GLOBAL_PIT, PIT, spin_wait};
+use crate::sys::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, APIC};
+use crate::sys::apic::timer::{APICTimerDividerOption, APICTimerMode};
+use crate::sys::pit::{GLOBAL_PIT, PIT, spin_wait};
 use crate::init::init::{boostrap_core_init, mp_initialization};
 use crate::init::smp::CORE_BOOT_FLAG;
 use crate::interrupts::{InterruptIndex, PICS};
@@ -71,7 +71,7 @@ use crate::process::process::Process;
 use crate::process::scheduler::GlobalScheduler;
 use crate::shell::Shell;
 use crate::vga_buffer::disable_cursor;
-use crate::hardware::resman::GLOBAL_RESMAN;
+use crate::sys::resman::GLOBAL_RESMAN;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
 #[macro_use]
@@ -81,7 +81,7 @@ mod macros;
 pub mod storage;
 pub mod config;
 pub mod init;
-pub mod hardware;
+pub mod sys;
 pub mod device;
 pub mod interrupts;
 pub mod memory;
@@ -125,7 +125,7 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
     boostrap_core_init(boot_info);
 
     // Must initialize after allocator
-    hardware::keyboard::initialize();
+    sys::keyboard::initialize();
 
     let mfg_string = x86_64::instructions::cpuid::mfgid();
     let str = String::from_utf8_lossy(&mfg_string).into_owned();

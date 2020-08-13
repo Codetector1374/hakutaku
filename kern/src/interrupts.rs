@@ -1,7 +1,7 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode, HandlerFunc};
 use crate::arch::x86_64::descriptor_table::DOUBLE_FAULT_IST_INDEX;
 use lazy_static::lazy_static;
-use crate::hardware::pic::ChainedPics;
+use crate::sys::pic::ChainedPics;
 use spin::MutexGuard;
 use x86_64::instructions::hlt;
 use crate::{FRAME_ALLOC, PAGE_TABLE};
@@ -9,7 +9,7 @@ use x86_64::structures::paging::{PageTable, Mapper, FrameAllocator, Page, PageTa
 use core::borrow::BorrowMut;
 use crate::memory::frame_allocator::FrameAllocWrapper;
 use crate::interrupts::context_switch::{apic_timer, syscall_handler};
-use crate::hardware::pit::GLOBAL_PIT;
+use crate::sys::pit::GLOBAL_PIT;
 use keyboard::*;
 use crate::interrupts::InterruptIndex::XHCI;
 use x86_64::PrivilegeLevel;

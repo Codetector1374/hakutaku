@@ -4,7 +4,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 use crate::memory::mmio_bump_allocator::VMALLOC;
 use x86_64::structures::paging::{Page, Size4KiB, PhysFrame, PageTableFlags, Mapper};
 use core::time::Duration;
-use crate::hardware::pit::PIT;
+use crate::sys::pit::PIT;
 use kernel_api::syscall::sleep;
 use x86_64::VirtAddr;
 use crate::device::usb::xhci::consts::*;

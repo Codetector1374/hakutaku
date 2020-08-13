@@ -14,7 +14,7 @@ use crate::memory::mmio_bump_allocator::VMALLOC;
 use usb_host::USBHost;
 use core::time::Duration;
 use kernel_api::syscall::sleep;
-use crate::hardware::pit::PIT;
+use crate::sys::pit::PIT;
 use usb_host::traits::USBHostController;
 use usb_host::consts::USBSpeed;
 

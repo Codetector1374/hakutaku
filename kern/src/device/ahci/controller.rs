@@ -9,7 +9,7 @@ use kernel_api::syscall::sleep;
 use core::time::Duration;
 use alloc::boxed::Box;
 use crate::device::ahci::structures::{CommandList, ReceivedFIS, CommandTable, FISType, FISRegH2D, AHCIPortCommStructures};
-use crate::hardware::pit::PIT;
+use crate::sys::pit::PIT;
 use super::consts::*;
 use core::cmp::min;
 use crate::device::ahci::device::{AHCISATADevice, AHCIDevice};

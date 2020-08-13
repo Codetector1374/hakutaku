@@ -6,8 +6,8 @@ use x86_64::instructions::interrupts::without_interrupts;
 use crate::memory::mmio_bump_allocator::VMALLOC;
 use volatile::Volatile;
 use spin::RwLock;
-use crate::hardware::apic::timer::{APICTimerDividerOption, APICTimerMode};
-use crate::hardware::pit::spin_wait;
+use crate::sys::apic::timer::{APICTimerDividerOption, APICTimerMode};
+use crate::sys::pit::spin_wait;
 use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
 use crate::memory::paging::PHYSMAP_BASE;
@@ -132,7 +132,7 @@ impl APIC {
     }
 
     pub fn set_timer_interval(&self, duration: Duration) -> Result<(), ()> {
-        use crate::hardware::apic::timer::APICTimerDividerOption::*;
+        use crate::sys::apic::timer::APICTimerDividerOption::*;
         let ticks: u64 = duration.as_micros() as u64 * self.scale as u64;
         let (div_ticks, div) =
             if ticks < MAX_TICK as u64 {

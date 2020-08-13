@@ -16,16 +16,16 @@ use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags, Phys
 use crate::{ACPI, ALLOCATOR, FRAME_ALLOC, interrupts, LOW_FALLOC, SCHEDULER};
 use crate::arch::x86_64::descriptor_table;
 use crate::arch::x86_64::KernACPIHandler;
-use crate::hardware::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, IPIDestinationShorthand};
-use crate::hardware::apic::timer::APICTimerMode;
-use crate::hardware::pit::GLOBAL_PIT;
+use crate::sys::apic::{APICDeliveryMode, GLOBAL_APIC, IPIDeliveryMode, IPIDestinationShorthand};
+use crate::sys::apic::timer::APICTimerMode;
+use crate::sys::pit::GLOBAL_PIT;
 use crate::init::smp::CORE_BOOT_FLAG;
 use crate::interrupts::{PICS, InterruptIndex};
 use crate::KERNEL_PDPS;
 use crate::memory::align_down;
 use crate::memory::frame_allocator::MemorySegment;
 use crate::memory::paging::{KERNEL_HEAP_BASE, KERNEL_HEAP_TOP, KERNEL_PML4_TABLE, KERNEL_TEXT_BASE, PHYSMAP_BASE};
-use crate::hardware::resman::GLOBAL_RESMAN;
+use crate::sys::resman::GLOBAL_RESMAN;
 use crate::device::uart::serial16650::COM1_BASE_ADDR;
 
 extern "C" {
@@ -255,12 +255,12 @@ pub fn mp_initialization() {
         // Register core with Resman
         GLOBAL_RESMAN.write().register_core(apic_id);
 
-        crate::hardware::apic::send_ipi(apic_id, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::NoShorthand);
+        crate::sys::apic::send_ipi(apic_id, 0, IPIDeliveryMode::INIT, IPIDestinationShorthand::NoShorthand);
         sleep(Duration::from_millis(10)).expect("");
-        crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
+        crate::sys::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
         sleep(Duration::from_millis(1)).unwrap();
         if CORE_BOOT_FLAG.load(Ordering::Relaxed) {
-            crate::hardware::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
+            crate::sys::apic::send_ipi(apic_id, 0x8, IPIDeliveryMode::StartUp, IPIDestinationShorthand::NoShorthand);
         }
         while CORE_BOOT_FLAG.load(Ordering::Relaxed) {
             sleep(Duration::from_millis(1)).expect("");

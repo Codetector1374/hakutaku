@@ -8,12 +8,12 @@ use crate::shell::Shell;
 use crate::process::process::Process;
 use crate::{SCHEDULER, interrupts};
 use crate::arch::x86_64::descriptor_table;
-use crate::hardware::apic::{GLOBAL_APIC, APICDeliveryMode};
-use crate::hardware::resman::GLOBAL_RESMAN;
+use crate::sys::apic::{GLOBAL_APIC, APICDeliveryMode};
+use crate::sys::resman::GLOBAL_RESMAN;
 use crate::interrupts::{init_idt, InterruptIndex};
 use x86_64::instructions::interrupts::int3;
 use core::time::Duration;
-use crate::hardware::apic::timer::APICTimerMode;
+use crate::sys::apic::timer::APICTimerMode;
 
 /// Is the core still booting?
 pub static CORE_BOOT_FLAG: AtomicBool = AtomicBool::new(false);

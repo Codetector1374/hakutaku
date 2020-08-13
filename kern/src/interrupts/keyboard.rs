@@ -3,7 +3,7 @@ use spin::MutexGuard;
 use crate::interrupts::{InterruptIndex, PICS};
 use spin::Mutex;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
-use crate::hardware::apic::GLOBAL_APIC;
+use crate::sys::apic::GLOBAL_APIC;
 
 lazy_static! {
     static ref KEYBOARD: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
@@ -26,7 +26,7 @@ pub(super) extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: &m
     if let Ok(Some(key_evnt)) = keyboard.add_byte(scancode) {
         if let Some(key) = keyboard.process_keyevent(key_evnt) {
             match key {
-                DecodedKey::Unicode(c) => crate::hardware::keyboard::put_char(c),
+                DecodedKey::Unicode(c) => crate::sys::keyboard::put_char(c),
                 _ => {}
                 // DecodedKey::RawKey(key) => println!("raw: {:?}", key),
             }

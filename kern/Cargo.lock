@@ -298,6 +298,7 @@ dependencies = [
  "hashbrown 0.6.3",
  "log",
  "modular-bitfield",
+ "pretty-hex",
  "spin",
 ]
 

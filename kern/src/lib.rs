@@ -171,10 +171,10 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
 
     // Load the first process
-    // let mut main_proc = Process::new();
-    // main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
-    // main_proc.context.rip = kernel_initialization_process as u64;
-    // SCHEDULER.add(main_proc);
+    let mut main_proc = Process::new();
+    main_proc.context.rsp = main_proc.stack.as_ref().unwrap().top().as_u64();
+    main_proc.context.rip = kernel_initialization_process as u64;
+    SCHEDULER.add(main_proc);
     SCHEDULER.start();
 }
 

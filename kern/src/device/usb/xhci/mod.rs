@@ -20,26 +20,18 @@ static XHCI_HAL: XhciHAL = XhciHAL();
 
 struct XhciHAL();
 
-impl xhci::HAL for XhciHAL {
-    fn current_time(&self) -> Duration {
-        PIT::current_time()
-    }
+impl xhci::XhciHAL for XhciHAL {
+    fn memory_barrier() {}
 
-    fn sleep(&self, dur: Duration) {
-        sleep(dur).unwrap();
-    }
-
-    fn memory_barrier(&self) {}
-
-    fn translate_addr(&self, addr: u64) -> u64 {
+    fn translate_addr(addr: u64) -> u64 {
         pt_translate!(VirtAddr::new(addr)).as_u64()
     }
 
-    fn flush_cache(&self, _addr: u64, _len: u64, _flush: FlushType) {
+    fn flush_cache(_addr: u64, _len: u64, _flush: FlushType) {
     }
 }
 
-impl usb_host::HAL2 for XhciHAL{
+impl usb_host::UsbHAL for XhciHAL{
     fn sleep(dur: Duration) {
         sleep(dur).expect("slept???");
     }
@@ -105,7 +97,7 @@ pub fn load_from_device(mut dev: PCIDevice) {
         });
 
         let mmio_vbase = va_root + base_offset;
-        let xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
+        let xhci = Xhci::<XhciHAL>::new(mmio_vbase.as_u64());
         let xhci_controller = Arc::new(XhciWrapper(Mutex::new(xhci)));
         let mut usbhost = USBHost::<XhciHAL>::new();
         let root_device = usbhost.attach_root_hub(xhci_controller, USBSpeed::Super);

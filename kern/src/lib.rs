@@ -124,9 +124,6 @@ pub extern "C" fn kinit(multiboot_ptr: usize) -> ! {
 
     boostrap_core_init(boot_info);
 
-    // Must initialize after allocator
-    sys::keyboard::initialize();
-
     let mfg_string = x86_64::instructions::cpuid::mfgid();
     let str = String::from_utf8_lossy(&mfg_string).into_owned();
     println!("CPUID Brand: {}", &str);

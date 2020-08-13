@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use core::fmt::Write;
 use core::str;
-use crate::sys::keyboard::{blocking_get_char, GLOB_KEYBOARD};
 use crate::process::scheduler::GlobalScheduler;
 use crate::{SCHEDULER, ACPI};
 use crate::sys::pit::PIT;
@@ -15,6 +14,7 @@ use crate::sys::apic::GLOBAL_APIC;
 use crate::device::pci::class::PCIDeviceClass;
 use crate::device::uart::serial16650::{Serial16650, COM1_BASE_ADDR};
 use crate::device::uart::{UART, SERIAL_PORTS};
+use crate::sys::stdin::STD_IN;
 
 /// Error type for `Command` parse failures.
 #[derive(Debug)]
@@ -73,7 +73,7 @@ impl Shell {
             {
                 print!("{}", prefix);
                 loop {
-                    let chr = blocking_get_char();
+                    let chr = crate::sys::stdin::STD_IN.blocking_get_char();
                     match chr {
                         b'\r' | b'\n' => { // \r \n
                             break;
@@ -245,7 +245,7 @@ impl Shell {
                             blk_dev.read_sector(sec, &mut buf).ok().expect("thing");
                             println!("First Half: \n{:?}", buf[..256].as_ref().hex_dump());
                             println!("press any key to continue...");
-                            blocking_get_char();
+                            STD_IN.blocking_get_char();
                             println!("Second Half: \n{:?}", buf[256..].as_ref().hex_dump());
                         }
                         _ => {

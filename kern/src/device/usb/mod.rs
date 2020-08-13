@@ -21,7 +21,7 @@ use usb_host::consts::USBSpeed;
 pub static G_USB: USBSystem = USBSystem(Mutex::new(None));
 
 pub struct USBHAL();
-impl usb_host::HAL2 for USBHAL {
+impl usb_host::UsbHAL for USBHAL {
     fn sleep(dur: Duration) {
         sleep(dur).expect("failed in sleep syscall");
     }

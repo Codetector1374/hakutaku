@@ -150,7 +150,12 @@ impl PCIController {
                     match serialbus {
                         PCISerialBusControllerClass::USBController(usb_ctlr) => {
                             debug!("USB on {} -> {:04x}:{:04x}", dev.bus_location_str(), dev.info.vendor_id, dev.info.device_id);
-                            G_USB.setup_controller(usb_ctlr.clone(), dev.clone());
+                            match usb_ctlr {
+                                PCISerialBusUSB::XHCI => {
+                                    crate::device::usb::xhci::load_from_device(dev);
+                                },
+                                _ => {}
+                            }
                         },
                         _ => {}
                     }

@@ -13,6 +13,7 @@ use xhci::{FlushType, Xhci, XhciWrapper};
 use usb_host::USBHost;
 use alloc::sync::Arc;
 use spin::Mutex;
+use usb_host::consts::USBSpeed;
 
 pub mod consts;
 static XHCI_HAL: XhciHAL = XhciHAL();
@@ -57,7 +58,7 @@ fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     (!new_val) as usize
 }
 
-pub fn create_from_device(id: u64, mut dev: PCIDevice) {
+pub fn load_from_device(mut dev: PCIDevice) {
     if let PCIDeviceClass::SerialBusController(PCISerialBusControllerClass::USBController(PCISerialBusUSB::XHCI)) = &dev.info.class {
         debug!("XHCI Device on: {:04x}:{:02x}:{:x} -> [{:04x}]:[{:04x}]",
                dev.bus, dev.device_number, dev.func, dev.info.vendor_id, dev.info.device_id);
@@ -107,7 +108,7 @@ pub fn create_from_device(id: u64, mut dev: PCIDevice) {
         let xhci = Xhci::new(mmio_vbase.as_u64(), &XHCI_HAL);
         let xhci_controller = Arc::new(XhciWrapper(Mutex::new(xhci)));
         let mut usbhost = USBHost::<XhciHAL>::new();
-        let root_device = usbhost.attach_root_hub(xhci_controller);
+        let root_device = usbhost.attach_root_hub(xhci_controller, USBSpeed::Super);
         USBHost::<XhciHAL>::setup_new_device(root_device);
 
 

@@ -1,9 +1,5 @@
-pub mod consts;
 pub mod interrupt;
 pub mod xhci;
-pub mod descriptor;
-pub mod device;
-pub mod error;
 
 use spin::{Mutex, RwLock};
 use crate::device::pci::GLOBAL_PCI;
@@ -13,54 +9,40 @@ use alloc::vec::Vec;
 use alloc::sync::Arc;
 // use crate::device::usb::xhci::port::XHCIPort;
 use x86_64::instructions::interrupts::without_interrupts;
-use crate::device::usb::device::USBDevice;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::mmio_bump_allocator::VMALLOC;
+use usb_host::USBHost;
+use core::time::Duration;
+use kernel_api::syscall::sleep;
+use crate::hardware::pit::PIT;
+use usb_host::traits::USBHostController;
+use usb_host::consts::USBSpeed;
 
-pub static G_USB: USBSystem = USBSystem {
-    // xhci: RwLock::new(Vec::new()),
-    devices: RwLock::new(Vec::new()),
-    next_controller_id: AtomicU64::new(1),
-    next_device_id: AtomicU64::new(1),
-};
+pub static G_USB: USBSystem = USBSystem(Mutex::new(None));
 
+pub struct USBHAL();
+impl usb_host::HAL2 for USBHAL {
+    fn sleep(dur: Duration) {
+        sleep(dur).expect("failed in sleep syscall");
+    }
 
-pub struct USBSystem {
-    // TODO: Support Multiple Controller
-    // pub xhci: RwLock<Vec<Arc<XHCI>>>,
-    pub devices: RwLock<Vec<Arc<dyn USBDevice + Sync + Send>>>,
-    pub next_controller_id: AtomicU64,
-    pub next_device_id: AtomicU64,
+    fn current_time() -> Duration {
+        PIT::current_time()
+    }
 }
 
+pub struct USBSystem(Mutex<Option<USBHost<USBHAL>>>);
+
 impl USBSystem {
-    pub fn setup_controller(&self, ctlr_type: PCISerialBusUSB, dev: PCIDevice) {
-        match ctlr_type {
-            PCISerialBusUSB::XHCI => {
-                // if dev.info.vendor_id == 0x8086 {
-                //     info!("Skipping Intel XHCI");
-                //     return;
-                // }
-                self::xhci::create_from_device(self.next_controller_id.fetch_add(1, Ordering::Acquire), dev);
-            },
-            _ => {
-                debug!("[USB] Unknown USB Host Type at {}: {:?}",
-                       dev.bus_location_str(), dev.info.class);
-            }
+    pub fn initialize(&self) {
+        let mut x = self.0.lock();
+        if x.is_some() {
+            panic!("USB Double Initialization triggered");
         }
+        x.replace(USBHost::new());
     }
 
-    pub fn issue_device_id(&self) -> u64 {
-        self.next_device_id.fetch_add(1, Ordering::Acquire)
-    }
-
-    pub fn register_device(&self, device: Arc<dyn USBDevice + Send + Sync>) {
-        self.devices.write().push(device);
-    }
-
-    pub fn remove_device(&self, device_id: u64) {
-        self.devices.write().retain(|dev| {
-            dev.system_device_id() != device_id
-        });
+    pub fn setup_controller(&self, controller: Arc<dyn USBHostController>, speed: USBSpeed) {
+        self.0.lock().as_mut().expect("USB Uninitialized").attach_root_hub(controller, speed);
     }
 }

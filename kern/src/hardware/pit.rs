@@ -3,6 +3,7 @@ use x86_64::instructions::interrupts::without_interrupts;
 use spin::{Mutex, RwLock};
 use core::time::Duration;
 use crate::interrupts::{PICS, InterruptIndex};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 const PIT_CH0: u16 = 0x40;
 const PIT_CH1: u16 = 0x41;
@@ -10,6 +11,7 @@ const PIT_CH2: u16 = 0x42;
 const PIT_CMD: u16 = 0x43;
 
 pub static GLOBAL_PIT: RwLock<PIT> = RwLock::new(PIT::new());
+pub static SYSTEM_TIME: AtomicU64 = AtomicU64::new(0);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -105,13 +107,11 @@ impl PIT {
 
     pub fn interrupt(&mut self) {
         self.spin_flag = true;
-        self.time += self.interval;
+        SYSTEM_TIME.fetch_add(self.interval.as_millis() as u64, Ordering::Acquire);
     }
 
     pub fn current_time() -> Duration {
-        without_interrupts(|| {
-            GLOBAL_PIT.read().time
-        })
+        Duration::from_millis(SYSTEM_TIME.load(Ordering::Relaxed))
     }
 }
 

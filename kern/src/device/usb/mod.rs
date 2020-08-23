@@ -7,18 +7,30 @@ use crate::device::pci::class::PCISerialBusUSB;
 use crate::device::pci::device::PCIDevice;
 use alloc::vec::Vec;
 use alloc::sync::Arc;
-// use crate::device::usb::xhci::port::XHCIPort;
 use x86_64::instructions::interrupts::without_interrupts;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::memory::mmio_bump_allocator::VMALLOC;
-use usb_host::USBHost;
+use usb_host::{USBHost, HostCallbacks, USBResult};
 use core::time::Duration;
 use kernel_api::syscall::sleep;
 use crate::sys::pit::PIT;
 use usb_host::traits::USBHostController;
 use usb_host::consts::USBSpeed;
+use usb_host::structs::USBDevice;
 
-pub static G_USB: USBSystem = USBSystem(Mutex::new(None));
+struct USBHostCallback();
+
+impl HostCallbacks<USBHAL> for USBHostCallback {
+    fn new_device(&self, _host: &Arc<USBHost<USBHAL>>, device: &Arc<RwLock<USBDevice>>) -> USBResult<()> {
+        debug!("[kUSB] Got new device: {:?}", &device.read().ddesc);
+        Ok(())
+    }
+}
+
+lazy_static! {
+    pub static ref G_USB: USBSystem = USBSystem(Arc::new(USBHost::new(Arc::new(USBHostCallback()))));
+}
+pub struct USBSystem(Arc<USBHost<USBHAL>>);
 
 pub struct USBHAL();
 impl usb_host::UsbHAL for USBHAL {
@@ -31,18 +43,8 @@ impl usb_host::UsbHAL for USBHAL {
     }
 }
 
-pub struct USBSystem(Mutex<Option<USBHost<USBHAL>>>);
-
 impl USBSystem {
-    pub fn initialize(&self) {
-        let mut x = self.0.lock();
-        if x.is_some() {
-            panic!("USB Double Initialization triggered");
-        }
-        x.replace(USBHost::new());
-    }
-
     pub fn setup_controller(&self, controller: Arc<dyn USBHostController>, speed: USBSpeed) {
-        self.0.lock().as_mut().expect("USB Uninitialized").attach_root_hub(controller, speed);
+        self.0.attach_root_hub(controller, speed);
     }
 }

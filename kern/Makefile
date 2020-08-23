@@ -50,9 +50,6 @@ usb: $(iso)
 
 run: $(iso)
 	@$(QEMU) $(QEMU_ARGS) \
-				-device usb-mouse \
-				-device usb-mouse \
-				-device usb-mouse \
 				-device usb-mouse
 
 gdb: $(iso)

@@ -17,6 +17,7 @@ use crate::sys::pit::PIT;
 use usb_host::traits::USBHostController;
 use usb_host::consts::USBSpeed;
 use usb_host::structs::USBDevice;
+use crate::device::usb::xhci::load_from_device;
 
 struct USBHostCallback();
 
@@ -46,5 +47,9 @@ impl usb_host::UsbHAL for USBHAL {
 impl USBSystem {
     pub fn setup_controller(&self, controller: Arc<dyn USBHostController>, speed: USBSpeed) {
         self.0.attach_root_hub(controller, speed);
+    }
+
+    pub fn setup_new_device(&self, dev: Arc<RwLock<USBDevice>>) {
+        USBHost::<USBHAL>::setup_new_device(&self.0, dev);
     }
 }

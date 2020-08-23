@@ -105,7 +105,7 @@ fn load_from_device_helper<H: UsbHAL>(mut dev: PCIDevice) {
         let xhci = Xhci::<XhciHAL>::new(mmio_vbase.as_u64());
         let xhci_controller = Arc::new(XhciWrapper(Mutex::new(xhci)));
         let root_device = crate::device::usb::G_USB.0.attach_root_hub(xhci_controller, USBSpeed::Super);
-        USBHost::<XhciHAL>::setup_new_device(root_device);
+        crate::device::usb::G_USB.setup_new_device(root_device);
 
 
     }

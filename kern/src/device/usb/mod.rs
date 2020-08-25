@@ -50,6 +50,6 @@ impl USBSystem {
     }
 
     pub fn setup_new_device(&self, dev: Arc<RwLock<USBDevice>>) {
-        USBHost::<USBHAL>::setup_new_device(&self.0, dev);
+        USBHost::<USBHAL>::setup_new_device(&self.0, dev).expect("USB Failed to load");
     }
 }

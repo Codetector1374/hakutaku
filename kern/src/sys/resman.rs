@@ -34,7 +34,7 @@ impl ResourceManager {
 
     pub fn register_core(&mut self, lapic_id: u8) {
         debug!("[RESMAN] Registering Core {}", lapic_id);
-        let mut tss = crate::arch::x86_64::descriptor_table::create_tss();
+        let tss = crate::arch::x86_64::descriptor_table::create_tss();
         let gdt = crate::arch::x86_64::descriptor_table::create_gdt(tss.get_tss_ptr());
 
         self.gdts.as_mut().unwrap().insert(lapic_id, gdt);

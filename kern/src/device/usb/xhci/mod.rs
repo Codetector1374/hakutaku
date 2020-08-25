@@ -51,7 +51,7 @@ fn xhci_address_space_detect(dev: &mut PCIDevice) -> usize {
     (!new_val) as usize
 }
 
-pub fn load_from_device(mut dev: PCIDevice) {
+pub fn load_from_device(dev: PCIDevice) {
     load_from_device_helper::<XhciHAL>(dev)
 }
 

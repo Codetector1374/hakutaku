@@ -10,6 +10,7 @@
 #![allow(deprecated)]
 #![feature(const_in_array_repeat_expressions)]
 #![feature(allocator_api)]
+#![feature(str_internals)]
 
 #[macro_use]
 extern crate alloc;
@@ -78,6 +79,7 @@ use x86_64::structures::idt::InterruptDescriptorTable;
 pub mod vga_buffer;
 #[macro_use]
 mod macros;
+pub mod structure;
 pub mod storage;
 pub mod config;
 pub mod init;
@@ -89,6 +91,7 @@ pub mod shell;
 pub mod logger;
 pub mod process;
 pub mod arch;
+pub mod fs;
 
 lazy_static! {
     static ref PAGE_TABLE: RwLock<OffsetPageTable<'static>> = {

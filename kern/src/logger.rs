@@ -1,5 +1,6 @@
 use log::{LevelFilter, Metadata, Record, Level};
-use crate::device::uart::SERIAL_PORTS;
+use crate::device::uart::{SERIAL_PORTS, HAS_SERIAL};
+use core::sync::atomic::Ordering;
 
 struct KernelLogger;
 
@@ -13,7 +14,9 @@ impl log::Log for KernelLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             // Record.target
-            println!("[{}] {}", record.level(), record.args());
+            if !HAS_SERIAL.load(Ordering::Relaxed) {
+                println!("[{}] {}", record.level(), record.args());
+            }
             match SERIAL_PORTS.try_read() {
                 Some(r_handele) => {
                     if let Some(p) = r_handele.ports.values().find(|_|{true}) {

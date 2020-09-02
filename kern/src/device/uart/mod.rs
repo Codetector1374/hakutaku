@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use hashbrown::HashMap;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering, AtomicBool};
 use crate::device::uart::serial16650::Serial16650;
 
 pub mod serial16650;
@@ -11,6 +11,8 @@ pub mod serial16650;
 lazy_static! {
     pub static ref SERIAL_PORTS: RwLock<SerialPorts> = RwLock::new(SerialPorts::new());
 }
+
+pub static HAS_SERIAL: AtomicBool = AtomicBool::new(false);
 
 pub trait UART : core_io::Write + core_io::Read + core::fmt::Write {
     fn set_baudrate(&mut self, baud: u32);
@@ -39,6 +41,7 @@ impl SerialPorts {
         }
         writeln!(port.lock(), "=============== PORT REGISTERED ======================").unwrap();
         self.ports.insert(id, port);
+        HAS_SERIAL.store(true, Ordering::Relaxed);
         id
     }
 

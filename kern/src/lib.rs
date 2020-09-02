@@ -183,11 +183,11 @@ pub extern fn kernel_initialization_process() {
     GLOBAL_PCI.lock().initialize_bus_with_devices();
 
     // MP initialization
-    // mp_initialization();
+    mp_initialization();
     //
     // Usb Proc
-    // let usbproc = Process::new_kern(usb_process as u64);
-    // SCHEDULER.add(usbproc);
+    let usbproc = Process::new_kern(usb_process as u64);
+    SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {
@@ -198,6 +198,6 @@ pub extern fn kernel_initialization_process() {
 
 pub extern fn usb_process() -> ! {
     loop {
-        // sleep(Duration::from_millis(1)).expect("");
+        crate::device::usb::xhci::poll_xhci_devices();
     }
 }

@@ -15,9 +15,13 @@ use alloc::sync::Arc;
 use spin::Mutex;
 use usb_host::consts::USBSpeed;
 use crate::device::usb::{USBHostCallback, USBHAL};
+use alloc::vec::Vec;
+use usb_host::traits::USBHostController;
 
 pub mod consts;
 static XHCI_HAL: XhciHAL = XhciHAL();
+
+static XHCI_CTRLRS: Mutex<Vec<Arc<XhciWrapper<XhciHAL>>>> = Mutex::new(Vec::new());
 
 struct XhciHAL();
 
@@ -104,12 +108,11 @@ fn load_from_device_helper<H: UsbHAL>(mut dev: PCIDevice) {
         let mmio_vbase = va_root + base_offset;
         let xhci = Xhci::<XhciHAL>::new(mmio_vbase.as_u64());
         let xhci_controller = Arc::new(XhciWrapper(Mutex::new(xhci)));
+        // register controller to the schedule
+        XHCI_CTRLRS.lock().push(xhci_controller.clone());
         let root_device = crate::device::usb::G_USB.0.attach_root_hub(xhci_controller, USBSpeed::Super);
         crate::device::usb::G_USB.setup_new_device(root_device);
-
-
     }
-    error!("[XHCI] No XHCI Controller Found");
 }
 
 /// Special Function to handle the intel controller
@@ -127,5 +130,13 @@ fn intel_ehci_xhci_handoff(pci_device: &mut PCIDevice) {
         debug!("[XHCI] [Intel] Configurable USB2 xHCI handoff: {:#x}", usb2_prm);
         // TODO!!! REMOVE & PORTS, this is a hack for me to keep usb2 functional
         pci_device.write_config_dword(USB_INTEL_XUSB2PR, usb2_prm);
+    }
+}
+
+pub fn poll_xhci_devices() {
+    if let Some(lock) = XHCI_CTRLRS.try_lock() {
+        for i in lock.iter() {
+            i.process_interrupts();
+        }
     }
 }

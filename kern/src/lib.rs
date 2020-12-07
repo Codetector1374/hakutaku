@@ -186,8 +186,8 @@ pub extern fn kernel_initialization_process() {
     mp_initialization();
     //
     // Usb Proc
-    let usbproc = Process::new_kern(usb_process as u64);
-    SCHEDULER.add(usbproc);
+    // let usbproc = Process::new_kern(usb_process as u64);
+    // SCHEDULER.add(usbproc);
 
     let mut shell = Shell::new();
     loop {

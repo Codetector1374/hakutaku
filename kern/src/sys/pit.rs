@@ -29,7 +29,6 @@ pub struct PIT {
     channel0: Port<u8>,
     mode: PITMode,
     interval: Duration,
-    spin_flag: bool,
     time: Duration,
 }
 
@@ -68,7 +67,6 @@ impl PIT {
             channel0: Port::new(PIT_CH0),
             mode: PITMode::TerminalCount,
             interval: Duration::from_nanos(0),
-            spin_flag: false,
             time: Duration::from_nanos(0),
         }
     }
@@ -105,8 +103,7 @@ impl PIT {
         self.setup(crate::config::SYSTEM_TIME_RESOLUTION, PITMode::SquareWave);
     }
 
-    pub fn interrupt(&mut self) {
-        self.spin_flag = true;
+    pub fn interrupt(&self) {
         SYSTEM_TIME.fetch_add(self.interval.as_millis() as u64, Ordering::Acquire);
     }
 

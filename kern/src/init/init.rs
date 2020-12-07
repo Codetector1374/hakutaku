@@ -207,12 +207,13 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
         PICS.lock().initialize();
     };
 
-    // ENABLE Interrupt at the END
-    x86_64::instructions::interrupts::enable();
 
     // Start Clock
     trace!("starting clock");
     GLOBAL_PIT.write().start_clock();
+
+    // ENABLE Interrupt at the END
+    x86_64::instructions::interrupts::enable();
 
     let (rsdtaddr, version) = match boot_info.rsdp_v2_tag() {
         Some(flag) => {
@@ -224,6 +225,7 @@ pub fn boostrap_core_init(boot_info: BootInformation) {
         }
     };
 
+    info!("Beging Searching for ACPI");
     let mut acpi_handler = KernACPIHandler {};
     let acpitable = unsafe { acpi::parse_rsdt(&mut acpi_handler, version, rsdtaddr) };
     match acpitable {

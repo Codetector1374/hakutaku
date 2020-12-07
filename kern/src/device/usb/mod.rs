@@ -22,6 +22,9 @@ use crate::device::usb::xhci::load_from_device;
 use usb_host::drivers::hub::HubDriver;
 use usb_host::drivers::keyboard::{HIDKeyboard, HIDKeyboardCallback};
 use crate::sys::stdin::STD_IN;
+use usb_host::drivers::mass_storage::{MassStorageDriver, MSDCallback, TransparentSCSI, SimpleBlockDevice};
+use crate::storage::block::device::BlockDevice;
+use core_io::error::ErrorKind;
 
 struct USBHostCallback();
 
@@ -32,6 +35,41 @@ impl HIDKeyboardCallback for USBKeyboardCallback {
         STD_IN.insert(ascii);
     }
 }
+
+struct MassFSHook();
+
+impl MSDCallback for MassFSHook {
+    fn on_new_scsi(scsi: TransparentSCSI) -> USBResult<()> {
+        let wrapper = USBSCSIWrapper(Mutex::new(scsi));
+        let str = crate::storage::block::G_BLOCK_DEV_MGR.write().register_root_device(Arc::new(wrapper));
+        debug!("USB MSD Attached as {}", str);
+        Ok(())
+    }
+}
+
+struct USBSCSIWrapper(Mutex<TransparentSCSI>);
+
+impl BlockDevice for USBSCSIWrapper {
+    fn sector_size(&self) -> u64 {
+        self.0.lock().sector_size()
+    }
+
+
+    fn read_sector(&self, sector: u64, buf: &mut [u8]) -> core_io::Result<usize> {
+        match self.0.lock().read_sector(sector, buf) {
+            Ok(num) => Ok(num),
+            Err(e) => {
+                warn!("USB MSD ReadError: {:?}", e);
+                Err(core_io::error::Error::from(ErrorKind::Other))
+            }
+        }
+    }
+
+    fn write_sector(&self, sector: u64, buf: &[u8]) -> core_io::Result<usize> {
+        unimplemented!()
+    }
+}
+
 
 impl HostCallbacks<USBHAL> for USBHostCallback {
     fn new_device(&self, host: &Arc<USBHost<USBHAL>>, device: &Arc<RwLock<USBDevice>>) -> USBResult<()> {
@@ -63,15 +101,16 @@ impl HostCallbacks<USBHAL> for USBHostCallback {
                     break;
                 }
             }
-            // if let Err(e) = MassStorageDriver::<XHCIHal, MassFSHook>::probe(&device, interface) {
-            //     error!("failed to probe msd: {:?}", e);
-            // }
-            // {
-            //     let d = device.read();
-            //     if matches!(d.device_state, DeviceState::Owned(_)) {
-            //         break;
-            //     }
-            // }
+            if let Err(e) = MassStorageDriver::<USBHAL, MassFSHook>::probe(&device, interface) {
+                error!("failed to probe msd: {:?}", e);
+            }
+            {
+                let d = device.read();
+                if matches!(d.device_state, DeviceState::Owned(_)) {
+                    break;
+                }
+            }
+
             if let Err(e) = HIDKeyboard::<USBHAL, USBKeyboardCallback>::probe(&device, interface) {
                 error!("failed to probe hidkbd: {:?}", e);
             }

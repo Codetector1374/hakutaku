@@ -8,12 +8,7 @@ DEVICE ?= /run/media/$(shell whoami)/C8A9-B957
 QEMU ?= qemu-system-x86_64
 QEMU_ARGS ?= -M q35 -no-reboot -cdrom $(iso) \
 						 -m 1G \
-						 -smp cpus=4 \
-						 -boot order=d \
-						 -device qemu-xhci \
-						 -drive id=main_disk,file=ext/demo.img,if=none \
-						 -device ide-hd,drive=main_disk \
-						 --trace events=./qemu_trace \
+ 						 -smp cpus=4 \
 						 -serial stdio
 
 linker_script := src/arch/$(arch)/linker.ld
@@ -38,7 +33,7 @@ copy: $(kernel)
 	sync
 
 kernel:
-	@RUST_TARGET_PATH=$(shell pwd) cargo xbuild --release --target x86_64-unknown-none
+	cargo xbuild --release --target x86_64-unknown-none.json
 
 clean:
 	@cargo clean
@@ -49,8 +44,7 @@ usb: $(iso)
 				    -device usb-storage,drive=my_usb_disk,id=usb0
 
 run: $(iso)
-	@$(QEMU) $(QEMU_ARGS) \
-				-device usb-mouse
+	@$(QEMU) $(QEMU_ARGS)
 
 gdb: $(iso)
 	@$(QEMU) -s -S $(QEMU_ARGS)

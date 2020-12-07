@@ -199,10 +199,10 @@ impl Shell {
                 Ok(0)
             },
             "ps" => {
-                println!("  PID  |   STATE  ");
+                println!("  PID  |     STATE    | PL  ");
                 println!("================================================================================");
                 for p in SCHEDULER.summary() {
-                    println!("  {:03}  | {}", p.pid, p.state)
+                    println!("  {:03} | {} | {}", p.pid, p.state, p.privilege_level)
                 }
                 Ok(0)
             }

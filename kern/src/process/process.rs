@@ -90,7 +90,8 @@ impl Process {
 
 pub struct ProcessSummary {
     pub pid: Id,
-    pub state: ProcessSummaryState
+    pub state: ProcessSummaryState,
+    pub privilege_level: u8,
 }
 
 impl From<&Process> for ProcessSummary {
@@ -98,6 +99,7 @@ impl From<&Process> for ProcessSummary {
         Self {
             pid: p.pid,
             state: ProcessSummaryState::from(&p.state),
+            privilege_level: (p.context.cs & 0b11) as u8,
         }
     }
 }

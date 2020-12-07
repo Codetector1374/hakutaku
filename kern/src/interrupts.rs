@@ -101,7 +101,7 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: &mut InterruptStackFra
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: &mut InterruptStackFrame) {
     // trace!("PIT Interrupt");
-    GLOBAL_PIT.write().interrupt();
+    GLOBAL_PIT.read().interrupt();
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
